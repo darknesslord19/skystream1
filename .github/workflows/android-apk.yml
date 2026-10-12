@@ -6,14 +6,14 @@ name: Android APK
 
 on:
   push:
-    branches: [master]
+    branches: [master, stable]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: android-apk
+  group: android-apk-${{ github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -95,8 +95,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest dist/*.apk \
-            --title "Son derleme (${GITHUB_SHA::7})" \
-            --notes "master dalının son hali. Çoğu telefon için skystream-arm64-v8a.apk, eski cihazlar ve TV'ler için skystream-armeabi-v7a.apk." \
-            --target "$GITHUB_SHA" --latest
+          if [ "$GITHUB_REF_NAME" = stable ]; then TAG=stable; TITLE="Kararlı (v2.8.1 tabanlı)"; LATEST=false; else TAG=latest; TITLE="Son derleme (${GITHUB_SHA::7})"; LATEST=true; fi
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" dist/*.apk \
+            --title "$TITLE" \
+            --notes "$GITHUB_REF_NAME dalı. Çoğu telefon için skystream-arm64-v8a.apk, eski cihazlar ve TV'ler için skystream-armeabi-v7a.apk." \
+            --target "$GITHUB_SHA" --latest=$LATEST

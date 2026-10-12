@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart'
     show LicenseEntryWithLineBreaks, LicenseRegistry;
-import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
@@ -120,19 +119,6 @@ class AppTheme {
   static TabBarThemeData _tabBarTheme(ColorScheme cs) =>
       TabBarThemeData(overlayColor: AppFocus.overlay(cs));
 
-  /// Page transitions: a gentle zoom-and-fade everywhere but iOS, which keeps
-  /// its own slide so the edge swipe back still works.
-  static const PageTransitionsTheme _pageTransitions = PageTransitionsTheme(
-    builders: {
-      TargetPlatform.android: ZoomPageTransitionsBuilder(),
-      TargetPlatform.fuchsia: ZoomPageTransitionsBuilder(),
-      TargetPlatform.linux: ZoomPageTransitionsBuilder(),
-      TargetPlatform.windows: ZoomPageTransitionsBuilder(),
-      TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
-      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-    },
-  );
-
   static ThemeData createDarkTheme(ColorScheme? dynamicScheme, {AppPalette? palette}) {
     _registerFontLicence();
     // With a palette chosen, it decides every colour; otherwise the device's
@@ -163,7 +149,6 @@ class AppTheme {
       brightness: Brightness.dark,
       fontFamily: fontFamily,
       scaffoldBackgroundColor: background,
-      pageTransitionsTheme: _pageTransitions,
       // Dialog Theme (Premium Grey)
       dialogTheme: DialogThemeData(
         backgroundColor: raised,
@@ -392,7 +377,6 @@ class AppTheme {
       brightness: Brightness.light,
       fontFamily: fontFamily,
       scaffoldBackgroundColor: colorScheme.surface,
-      pageTransitionsTheme: _pageTransitions,
 
       // Dialog Theme
       dialogTheme: DialogThemeData(
