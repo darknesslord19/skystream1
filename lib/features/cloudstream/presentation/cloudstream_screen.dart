@@ -41,6 +41,15 @@ class CloudStreamScreen extends ConsumerWidget {
             },
           ),
           title: Text(l10n.cloudStreamExtensions),
+          actions: [
+            Builder(
+              builder: (barContext) => IconButton(
+                icon: const Icon(Icons.add_rounded),
+                tooltip: l10n.addRepository,
+                onPressed: () => unawaited(addCloudStreamRepository(barContext, ref)),
+              ),
+            ),
+          ],
           bottom: TabBar(
             tabs: [
               Tab(text: l10n.installed),
@@ -68,6 +77,33 @@ class CloudStreamScreen extends ConsumerWidget {
   }
 }
 
+/// Asks for a repository address and adds it, then shows the Repositories tab. Shared by the
+/// header's button, the app bar's + and the empty Repositories tab, so adding is always in reach.
+Future<void> addCloudStreamRepository(BuildContext context, WidgetRef ref) async {
+  final messenger = ScaffoldMessenger.of(context);
+  final l10n = AppLocalizations.of(context)!;
+  final tabs = DefaultTabController.maybeOf(context);
+  final url = await TextInputDialog.show(
+    context,
+    title: l10n.cloudStreamAddRepositoryTitle,
+    message: l10n.cloudStreamAddRepositoryMessage,
+    hintText: l10n.repoUrlOrShortcode,
+    keyboardType: TextInputType.url,
+    confirmLabel: l10n.cloudStreamAdd,
+    showPasteButton: true,
+    width: 480,
+  );
+  if (url == null || url.trim().isEmpty) return;
+  try {
+    final repo = await ref.read(cloudStreamRepositoryProvider.notifier).addRepository(url.trim());
+    messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name))));
+    tabs?.animateTo(1);
+  } catch (error, stack) {
+    talker.error('[CloudStream] adding repository $url failed', error, stack);
+    messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamCouldNotAdd(CloudStreamRepository.errorMessage(error)))));
+  }
+}
+
 class _Header extends ConsumerStatefulWidget {
   const _Header();
 
@@ -80,27 +116,9 @@ class _HeaderState extends ConsumerState<_Header> {
   bool _refreshing = false;
 
   Future<void> _addRepository() async {
-    final messenger = ScaffoldMessenger.of(context);
-    final l10n = AppLocalizations.of(context)!;
-    final url = await TextInputDialog.show(
-      context,
-      title: l10n.cloudStreamAddRepositoryTitle,
-      message: l10n.cloudStreamAddRepositoryMessage,
-      hintText: l10n.repoUrlOrShortcode,
-      keyboardType: TextInputType.url,
-      confirmLabel: l10n.cloudStreamAdd,
-      showPasteButton: true,
-      width: 480,
-    );
-    if (url == null || url.isEmpty) return;
     setState(() => _adding = true);
     try {
-      final repo = await ref.read(cloudStreamRepositoryProvider.notifier).addRepository(url);
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name))));
-      if (mounted) DefaultTabController.of(context).animateTo(1);
-    } catch (error, stack) {
-      talker.error('[CloudStream] adding repository $url failed', error, stack);
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamCouldNotAdd(CloudStreamRepository.errorMessage(error)))));
+      await addCloudStreamRepository(context, ref);
     } finally {
       if (mounted) setState(() => _adding = false);
     }
@@ -302,6 +320,8 @@ class _RepositoriesTab extends ConsumerWidget {
         icon: Icons.snippet_folder_outlined,
         title: l10n.cloudStreamNoRepositories,
         message: l10n.addRepoDescription,
+        actionLabel: l10n.addRepository,
+        onAction: () => unawaited(addCloudStreamRepository(context, ref)),
       );
     }
     return ListView(
@@ -638,11 +658,13 @@ class _Chip extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.icon, required this.title, required this.message});
+  const _Empty({required this.icon, required this.title, required this.message, this.actionLabel, this.onAction});
 
   final IconData icon;
   final String title;
   final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -663,6 +685,14 @@ class _Empty extends StatelessWidget {
               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: LayoutConstants.spacingMd),
+              FilledButton.icon(
+                onPressed: onAction,
+                icon: const Icon(Icons.add_circle_outline),
+                label: Text(actionLabel!),
+              ),
+            ],
           ],
         ),
       ),
