@@ -1,0 +1,103 @@
+name: Android APK
+
+# Builds the Android APK on every push to master (or by hand) and publishes it to
+# the "latest" release, so the newest build is always at the same direct link:
+# https://github.com/<owner>/<repo>/releases/download/latest/skystream-arm64-v8a.apk
+
+on:
+  push:
+    branches: [master, stable]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.5
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Set Up JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Install Dependencies
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Strip Desktop Binaries
+        run: rm -f packages/flutter_torrent_server/assets/torrserver/TorrServer-*
+
+      - name: Generate dart-defines file
+        shell: bash
+        run: |
+          cat > dart-defines.json << 'JSON_EOF'
+          {
+            "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
+            "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
+            "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
+            "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
+            "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
+            "MAL_CLIENT_SECRET": "${{ secrets.MAL_CLIENT_SECRET }}",
+            "ANILIST_CLIENT_ID": "${{ secrets.ANILIST_CLIENT_ID }}",
+            "ANIMESKIP_CLIENT_ID": "${{ secrets.ANIMESKIP_CLIENT_ID }}",
+            "OPENSUBTITLES_API_KEY": "${{ secrets.OPENSUBTITLES_API_KEY }}"
+          }
+          JSON_EOF
+
+      - name: Analyze
+        shell: bash
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings lib > analyze.log 2>&1
+          code=$?
+          grep -E "^ *error " analyze.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done
+          exit $code
+
+      - name: Build Split APKs
+        shell: bash
+        run: |
+          set +e
+          flutter build apk --release --split-per-abi --dart-define-from-file=dart-defines.json 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != 0 ]; then
+            grep -E "Error|error:|\.dart:[0-9]+:[0-9]+|FAILURE|What went wrong" -A2 build.log | head -60 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit $code
+
+      - name: Name APKs
+        run: |
+          mkdir dist
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-$abi-release.apk" "dist/skystream-$abi.apk"
+          done
+
+      - name: Publish to the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_NAME" = stable ]; then TAG=stable; TITLE="Kararlı (v2.8.1 tabanlı)"; LATEST=false; else TAG=latest; TITLE="Son derleme (${GITHUB_SHA::7})"; LATEST=true; fi
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" dist/*.apk \
+            --title "$TITLE" \
+            --notes "$GITHUB_REF_NAME dalı. Çoğu telefon için skystream-arm64-v8a.apk, eski cihazlar ve TV'ler için skystream-armeabi-v7a.apk." \
+            --target "$GITHUB_SHA" --latest=$LATEST
