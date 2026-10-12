@@ -12,6 +12,7 @@ import '../../../core/addons/models/addon_meta.dart';
 import '../../../core/router/app_router.dart';
 import '../../../shared/widgets/cards_wrapper.dart';
 import 'addon_providers.dart';
+import '../../../core/addons/data/builtin_addons.dart';
 import 'widgets/addon_manage_view.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
@@ -1130,4 +1131,26 @@ class _RowProblem extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Cinemeta's popular movies and series as catalog rows, for screens outside
+/// the Catalogs tab (Home shows them whatever plugin is selected, and without
+/// one). Cinemeta is built in, so these need nothing installed.
+final List<BrowsableCatalog> cinemetaHomeCatalogs = [
+  for (final catalog in BuiltInAddons.cinemeta.manifest!.catalogs)
+    BrowsableCatalog(
+      addon: BuiltInAddons.cinemeta,
+      catalog: AddonCatalog(type: catalog.type, id: catalog.id, name: 'Cinemeta', extra: catalog.extra),
+    ),
+];
+
+/// One add-on catalog as a horizontal row, the same row the Catalogs tab
+/// shows: posters, "view all", and a tap that opens the title's details.
+class AddonCatalogRow extends StatelessWidget {
+  const AddonCatalogRow({super.key, required this.entry});
+
+  final BrowsableCatalog entry;
+
+  @override
+  Widget build(BuildContext context) => _CatalogRow(entry: entry, onEmpty: (_) {});
 }

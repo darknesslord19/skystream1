@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'home_provider.dart';
+import '../../addons/presentation/addons_screen.dart' show AddonCatalogRow, cinemetaHomeCatalogs;
 import 'home_state.dart';
 import 'widgets/home_check_card.dart';
 
@@ -406,6 +407,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                   ),
                 ),
 
+              // Cinemeta's popular movies and series, whatever plugin is
+              // selected: opening one finds streams through the installed
+              // Stremio add-ons and Nuvio scrapers.
+              SliverToBoxAdapter(
+                child: Column(
+                  children: [
+                    for (final entry in cinemetaHomeCatalogs)
+                      AddonCatalogRow(key: ValueKey('home_${entry.key}'), entry: entry),
+                  ],
+                ),
+              ),
+
               SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
@@ -491,9 +504,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     AppLocalizations l10n, {
     bool isWidescreen = false,
   }) {
+    // No plugin selected: Cinemeta's rows still fill Home, with the prompt
+    // to pick a plugin below them.
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.only(
+            top: isWidescreen ? 16 : MediaQuery.of(context).padding.top + kToolbarHeight,
+          ),
+        ),
+        for (final entry in cinemetaHomeCatalogs)
+          SliverToBoxAdapter(
+            child: AddonCatalogRow(key: ValueKey('home_none_${entry.key}'), entry: entry),
+          ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 32),
+            child: _noProviderPrompt(context, l10n, isWidescreen: isWidescreen),
+          ),
+        ),
+        SliverPadding(
+          padding: EdgeInsets.only(bottom: LayoutConstants.shellBottomContentPadding(context)),
+        ),
+      ],
+    );
+  }
+
+  Widget _noProviderPrompt(
+    BuildContext context,
+    AppLocalizations l10n, {
+    bool isWidescreen = false,
+  }) {
     return Center(
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             Icons.extension_off_rounded,
