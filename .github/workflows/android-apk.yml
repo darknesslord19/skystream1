@@ -64,8 +64,25 @@ jobs:
           }
           JSON_EOF
 
+      - name: Analyze
+        shell: bash
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings lib > analyze.log 2>&1
+          code=$?
+          grep -E "^ *error " analyze.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done
+          exit $code
+
       - name: Build Split APKs
-        run: flutter build apk --release --split-per-abi --dart-define-from-file=dart-defines.json
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build apk --release --split-per-abi --dart-define-from-file=dart-defines.json 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != 0 ]; then
+            grep -E "Error|error:|\.dart:[0-9]+:[0-9]+|FAILURE|What went wrong" -A2 build.log | head -60 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit $code
 
       - name: Name APKs
         run: |
