@@ -501,6 +501,7 @@ class _MyAppState extends ConsumerState<MyApp> {
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(appThemeModeProvider);
+    final palette = ref.watch(appPaletteProvider);
     final appRouter = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
     final profileAsync = ref.watch(deviceProfileProvider);
@@ -529,10 +530,8 @@ class _MyAppState extends ConsumerState<MyApp> {
           title: 'SkyStream',
           debugShowCheckedModeBanner: false,
           themeMode: themeMode,
-          theme: lightDynamic != null
-              ? AppTheme.createLightTheme(lightDynamic)
-              : AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.createDarkTheme(darkScheme),
+          theme: AppTheme.createLightTheme(lightDynamic, palette: palette),
+          darkTheme: AppTheme.createDarkTheme(darkScheme, palette: palette),
           routerConfig: appRouter,
           locale: locale,
           localizationsDelegates: const [

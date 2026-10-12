@@ -21,6 +21,14 @@ class SettingsRepository {
     return _storageService.getThemeMode();
   }
 
+  Future<void> saveThemePalette(String id) async {
+    await _storageService.saveThemePalette(id);
+  }
+
+  String? getThemePalette() {
+    return _storageService.getThemePalette();
+  }
+
   Future<void> setSidebarExpanded(bool expanded) async {
     await _storageService.setSidebarExpanded(expanded);
   }

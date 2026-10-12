@@ -115,13 +115,23 @@ class _NavTabCell extends StatefulWidget {
 class _NavTabCellState extends State<_NavTabCell> {
   bool _isFocused = false;
 
+  /// True while a finger is down on the tab: the icon squeezes in, then springs
+  /// back out on release.
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed != value) setState(() => _pressed = value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final selected = widget.isSelected;
+    final iconColor = selected ? colorScheme.onSecondaryContainer : colorScheme.onSurfaceVariant;
 
     return Semantics(
       button: true,
-      selected: widget.isSelected,
+      selected: selected,
       label: widget.destination.label,
       child: Tooltip(
         message: widget.destination.label,
@@ -143,17 +153,50 @@ class _NavTabCellState extends State<_NavTabCell> {
             focusColor: Colors.transparent,
             hoverColor: colorScheme.primary.withValues(alpha: 0.08),
             splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.transparent,
             onFocusChange: (focused) => setState(() => _isFocused = focused),
+            onTapDown: (_) => _setPressed(true),
+            onTapUp: (_) => _setPressed(false),
+            onTapCancel: () => _setPressed(false),
             onTap: widget.onTap,
             child: Center(
-              child: Icon(
-                widget.isSelected
-                    ? widget.destination.selectedIcon
-                    : widget.destination.icon,
-                color: widget.isSelected
-                    ? colorScheme.primary
-                    : colorScheme.onSurfaceVariant,
-                size: 24,
+              child: AnimatedScale(
+                // Press: squeeze. Release: spring back past 1 and settle.
+                scale: _pressed ? 0.82 : 1.0,
+                duration: Duration(milliseconds: _pressed ? 90 : 420),
+                curve: _pressed ? Curves.easeOut : Curves.elasticOut,
+                child: AnimatedContainer(
+                  // The selected tab's pill grows out from the icon.
+                  duration: const Duration(milliseconds: 320),
+                  curve: Curves.easeOutCubic,
+                  width: selected ? 58 : 40,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: selected ? colorScheme.secondaryContainer : colorScheme.secondaryContainer.withValues(alpha: 0),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  alignment: Alignment.center,
+                  child: AnimatedScale(
+                    scale: selected ? 1.12 : 1.0,
+                    duration: const Duration(milliseconds: 380),
+                    curve: Curves.easeOutBack,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, animation) => ScaleTransition(
+                        scale: Tween<double>(begin: 0.6, end: 1).animate(
+                          CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+                        ),
+                        child: FadeTransition(opacity: animation, child: child),
+                      ),
+                      child: Icon(
+                        selected ? widget.destination.selectedIcon : widget.destination.icon,
+                        key: ValueKey<bool>(selected),
+                        color: iconColor,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
           ),

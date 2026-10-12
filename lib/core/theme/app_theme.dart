@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../../shared/focus/app_focus.dart';
+import 'app_palettes.dart';
 
 class AppTheme {
   /// The bundled application type family.
@@ -118,31 +119,55 @@ class AppTheme {
   static TabBarThemeData _tabBarTheme(ColorScheme cs) =>
       TabBarThemeData(overlayColor: AppFocus.overlay(cs));
 
-  static ThemeData createDarkTheme(ColorScheme? dynamicScheme) {
-    _registerFontLicence();
-    var colorScheme =
-        dynamicScheme ??
-        ColorScheme.fromSeed(
-          seedColor: const Color(0xFF448AFF), // Blue Accent seed
-          brightness: Brightness.dark,
-          surface: const Color(0xFF000000), // Default surface
-        );
+  /// Page transitions: a gentle zoom-and-fade everywhere but iOS, which keeps
+  /// its own slide so the edge swipe back still works.
+  static const PageTransitionsTheme _pageTransitions = PageTransitionsTheme(
+    builders: {
+      TargetPlatform.android: ZoomPageTransitionsBuilder(),
+      TargetPlatform.fuchsia: ZoomPageTransitionsBuilder(),
+      TargetPlatform.linux: ZoomPageTransitionsBuilder(),
+      TargetPlatform.windows: ZoomPageTransitionsBuilder(),
+      TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
+      TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    },
+  );
 
-    // Ensure surface is always Pitch Black for list items/cards
-    colorScheme = colorScheme.copyWith(surface: const Color(0xFF000000));
+  static ThemeData createDarkTheme(ColorScheme? dynamicScheme, {AppPalette? palette}) {
+    _registerFontLicence();
+    // With a palette chosen, it decides every colour; otherwise the device's
+    // wallpaper colours, and the original blue where there are none.
+    final background = palette?.background ?? const Color(0xFF000000);
+    final raised = palette == null
+        ? const Color(0xFF18181F)
+        : Color.alphaBlend(palette.seed.withValues(alpha: 0.07), Color.lerp(background, Colors.white, 0.06)!);
+    final line = palette == null ? const Color(0xFF22222E) : Color.lerp(background, Colors.white, 0.11)!;
+    var colorScheme = palette != null
+        ? ColorScheme.fromSeed(
+            seedColor: palette.seed,
+            brightness: Brightness.dark,
+            dynamicSchemeVariant: palette.variant,
+          )
+        : (dynamicScheme ??
+              ColorScheme.fromSeed(
+                seedColor: const Color(0xFF448AFF), // Blue Accent seed
+                brightness: Brightness.dark,
+                surface: const Color(0xFF000000), // Default surface
+              ));
+
+    // Surfaces follow the screen colour so lists and cards sit flush on it.
+    colorScheme = colorScheme.copyWith(surface: background);
 
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       fontFamily: fontFamily,
-      scaffoldBackgroundColor: const Color(
-        0xFF000000,
-      ), // Pure Black Background for Screens
+      scaffoldBackgroundColor: background,
+      pageTransitionsTheme: _pageTransitions,
       // Dialog Theme (Premium Grey)
-      dialogTheme: const DialogThemeData(
-        backgroundColor: Color(0xFF18181F),
+      dialogTheme: DialogThemeData(
+        backgroundColor: raised,
         surfaceTintColor: Colors.transparent,
-        titleTextStyle: TextStyle(
+        titleTextStyle: const TextStyle(
           fontFamily: fontFamily,
           fontSize: 20,
           fontWeight: FontWeight.w600,
@@ -151,18 +176,18 @@ class AppTheme {
       ),
 
       // Bottom Sheet Theme (Premium Grey)
-      bottomSheetTheme: const BottomSheetThemeData(
-        backgroundColor: Color(0xFF18181F),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: raised,
         surfaceTintColor: Colors.transparent,
-        modalBackgroundColor: Color(0xFF18181F),
+        modalBackgroundColor: raised,
       ),
 
       // Card Theme (Pitch Black for List Items)
-      cardTheme: const CardThemeData(
-        color: Color(0xFF000000),
+      cardTheme: CardThemeData(
+        color: background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       ),
 
       // Material 3 Color Scheme
@@ -238,8 +263,8 @@ class AppTheme {
           ),
 
       // AppBar
-      appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFF000000),
+      appBarTheme: AppBarTheme(
+        backgroundColor: background,
         elevation: 0,
         centerTitle: false,
         scrolledUnderElevation: 0,
@@ -248,9 +273,7 @@ class AppTheme {
 
       // Bottom Navigation
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: const Color(
-          0xFF000000,
-        ), // Pure Black matches background
+        backgroundColor: background,
         selectedItemColor: colorScheme.primary,
         unselectedItemColor: colorScheme.onSurfaceVariant,
         type: BottomNavigationBarType.fixed,
@@ -267,7 +290,7 @@ class AppTheme {
       // Input Decoration
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF18181F), // Slightly lighter grey for fields
+        fillColor: raised,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
           borderSide: BorderSide.none,
@@ -286,11 +309,11 @@ class AppTheme {
         ),
       ),
 
-      dividerColor: const Color(0xFF22222E),
-      dividerTheme: const DividerThemeData(
+      dividerColor: line,
+      dividerTheme: DividerThemeData(
         thickness: 1,
         space: 1,
-        color: Color(0xFF22222E),
+        color: line,
       ),
 
       // One focus indicator for every Material control. See
@@ -323,9 +346,19 @@ class AppTheme {
     );
   }
 
-  static ThemeData createLightTheme(ColorScheme? dynamicScheme) {
+  static ThemeData createLightTheme(ColorScheme? dynamicScheme, {AppPalette? palette}) {
     _registerFontLicence();
-    const colorScheme = ColorScheme.light(
+    final colorScheme = palette != null
+        ? ColorScheme.fromSeed(
+            seedColor: palette.seed,
+            brightness: Brightness.light,
+            dynamicSchemeVariant: palette.variant,
+          )
+        : _warmLightScheme;
+    return _lightTheme(colorScheme);
+  }
+
+  static const ColorScheme _warmLightScheme = ColorScheme.light(
       primary: lightCoral,
       onPrimary: Colors.white,
       primaryContainer: Color(0xFFFFDAD4),
@@ -352,11 +385,13 @@ class AppTheme {
       surfaceContainerHighest: Color(0xFFE4D9C8),
     );
 
+  static ThemeData _lightTheme(ColorScheme colorScheme) {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
       fontFamily: fontFamily,
       scaffoldBackgroundColor: colorScheme.surface,
+      pageTransitionsTheme: _pageTransitions,
 
       // Dialog Theme
       dialogTheme: DialogThemeData(

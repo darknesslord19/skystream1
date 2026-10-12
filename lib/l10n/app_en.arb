@@ -1844,5 +1844,8 @@
   "actorRoleSupporting": "Supporting",
   "@actorRoleSupporting": {"description": "Cast card: a supporting character."},
   "actorRoleBackground": "Background",
-  "@actorRoleBackground": {"description": "Cast card: a background (minor) character."}
+  "@actorRoleBackground": {"description": "Cast card: a background (minor) character."},
+  "colorTheme": "Colour theme",
+  "colorThemeDynamic": "Dynamic (device colours)",
+  "colorThemeHint": "Pick an accent and background. Dynamic follows your wallpaper."
 }

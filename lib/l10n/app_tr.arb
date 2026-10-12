@@ -882,5 +882,8 @@
   "cloudStreamSupport": "Destek",
   "cloudStreamSupportFailed": "{name} mesajları açılamadı: {error}",
   "cloudStreamSettingsStopped": "{name} ayarları durdu: {error}",
-  "swipeAgainToBoost": "%100'ün üzerine çıkmak için tekrar yukarı kaydırın"
+  "swipeAgainToBoost": "%100'ün üzerine çıkmak için tekrar yukarı kaydırın",
+  "colorTheme": "Renk teması",
+  "colorThemeDynamic": "Dinamik (cihaz renkleri)",
+  "colorThemeHint": "Bir vurgu rengi ve arka plan seçin. Dinamik, duvar kağıdınızı izler."
 }

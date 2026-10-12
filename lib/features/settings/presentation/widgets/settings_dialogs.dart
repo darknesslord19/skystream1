@@ -16,6 +16,7 @@ import '../../../../core/network/doh_service.dart';
 import '../../../../core/storage/settings_repository.dart';
 import '../../../../core/services/download_service.dart';
 import '../../../../core/theme/theme_provider.dart';
+import '../../../../core/theme/app_palettes.dart';
 import '../../../../core/utils/app_utils.dart';
 import '../../../../shared/widgets/loading_indicator.dart';
 import '../../../player/domain/network_buffer.dart';
@@ -2952,6 +2953,150 @@ class _TmdbApiKeyDialogState extends ConsumerState<_TmdbApiKeyDialog> {
           child: Text(l10n.save),
         ),
       ],
+    );
+  }
+}
+
+/// Settings → Colour theme: the device's dynamic colours, or one of
+/// [AppPalette.all], shown as a grid of swatches. The choice applies at once.
+void showPaletteDialog(BuildContext context, WidgetRef ref) {
+  final l10n = AppLocalizations.of(context)!;
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Consumer(
+      builder: (context, ref, _) {
+        final current = ref.watch(appPaletteProvider);
+        void pick(AppPalette? palette) {
+          unawaited(ref.read(appPaletteProvider.notifier).select(palette));
+        }
+
+        return AlertDialog(
+          surfaceTintColor: Colors.transparent,
+          title: Text(l10n.colorTheme),
+          content: SizedBox(
+            width: 420,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l10n.colorThemeHint, style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 16),
+                  _PaletteSwatch(
+                    name: l10n.colorThemeDynamic,
+                    seed: null,
+                    background: const Color(0xFF000000),
+                    selected: current == null,
+                    onTap: () => pick(null),
+                  ),
+                  const SizedBox(height: 12),
+                  GridView.count(
+                    crossAxisCount: 4,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 8,
+                    childAspectRatio: 0.78,
+                    children: [
+                      for (final palette in AppPalette.all)
+                        _PaletteSwatch(
+                          name: palette.name,
+                          seed: palette.seed,
+                          background: palette.background,
+                          selected: current?.id == palette.id,
+                          onTap: () => pick(palette),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop<void>(dialogContext),
+              child: Text(MaterialLocalizations.of(context).closeButtonLabel),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
+class _PaletteSwatch extends StatelessWidget {
+  const _PaletteSwatch({
+    required this.name,
+    required this.seed,
+    required this.background,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String name;
+  final Color? seed;
+  final Color background;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final accent = seed;
+    final circle = AnimatedScale(
+      scale: selected ? 1.08 : 1.0,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutBack,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: selected ? cs.primary : cs.outlineVariant, width: selected ? 3 : 1),
+          gradient: accent == null
+              ? const SweepGradient(
+                  colors: [Color(0xFF448AFF), Color(0xFF10B981), Color(0xFFFFB300), Color(0xFFE91E63), Color(0xFF448AFF)],
+                )
+              : LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [accent, accent, background, background],
+                  stops: const [0, 0.5, 0.5, 1],
+                ),
+        ),
+        child: selected ? const Icon(Icons.check_rounded, color: Colors.white, size: 22) : null,
+      ),
+    );
+
+    final label = Text(
+      name,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      textAlign: accent == null ? TextAlign.start : TextAlign.center,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        color: selected ? cs.primary : cs.onSurface,
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: name,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: accent == null
+              ? Row(children: [circle, const SizedBox(width: 12), Expanded(child: label)])
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [circle, const SizedBox(height: 6), label],
+                ),
+        ),
+      ),
     );
   }
 }

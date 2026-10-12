@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../storage/settings_repository.dart';
+import 'app_palettes.dart';
 
 part 'theme_provider.g.dart';
 
@@ -41,5 +43,18 @@ class AppThemeMode extends _$AppThemeMode {
       default:
         return ThemeMode.dark;
     }
+  }
+}
+
+/// The chosen colour theme, or null for the device's dynamic colours.
+final appPaletteProvider = NotifierProvider<AppPaletteNotifier, AppPalette?>(AppPaletteNotifier.new);
+
+class AppPaletteNotifier extends Notifier<AppPalette?> {
+  @override
+  AppPalette? build() => AppPalette.byId(ref.watch(settingsRepositoryProvider).getThemePalette());
+
+  Future<void> select(AppPalette? palette) async {
+    state = palette;
+    await ref.read(settingsRepositoryProvider).saveThemePalette(palette?.id ?? AppPalette.dynamicId);
   }
 }

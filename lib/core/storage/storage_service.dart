@@ -198,6 +198,14 @@ class StorageService {
     return _settingsBox.get('theme_mode') as String?;
   }
 
+  Future<void> saveThemePalette(String id) async {
+    await _settingsBox.put('theme_palette', id);
+  }
+
+  String? getThemePalette() {
+    return _settingsBox.get('theme_palette') as String?;
+  }
+
   // --- Sidebar State ---
   Future<void> setSidebarExpanded(bool expanded) async {
     await _settingsBox.put('sidebar_expanded', expanded);

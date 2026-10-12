@@ -330,7 +330,10 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
                                   canRequestFocus: false,
                                   skipTraversal: true,
                                   onKeyEvent: _onContentKeyEvent,
-                                  child: widget.navigationShell,
+                                  child: TabSwitchTransition(
+                                    index: widget.navigationShell.currentIndex,
+                                    child: widget.navigationShell,
+                                  ),
                                 ),
                               ),
                             ),
@@ -390,7 +393,10 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
                   bottom: mq.viewPadding.bottom + navBarTotalHeight,
                 ),
               ),
-              child: widget.navigationShell,
+              child: TabSwitchTransition(
+                index: widget.navigationShell.currentIndex,
+                child: widget.navigationShell,
+              ),
             ),
             bottomNavigationBar: Padding(
               padding: EdgeInsets.only(
@@ -414,6 +420,56 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Plays a short fade-and-grow on [child] whenever [index] changes, so moving
+/// between the shell's tabs is a soft zoom instead of a hard cut.
+///
+/// The child is never swapped or re-keyed - the branch navigators underneath
+/// keep their state and scroll positions - only its opacity and scale move.
+class TabSwitchTransition extends StatefulWidget {
+  const TabSwitchTransition({super.key, required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  State<TabSwitchTransition> createState() => _TabSwitchTransitionState();
+}
+
+class _TabSwitchTransitionState extends State<TabSwitchTransition> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 280),
+    value: 1,
+  );
+  late final Animation<double> _curve = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
+  late final Animation<double> _scale = Tween<double>(begin: 0.94, end: 1).animate(_curve);
+  late final Animation<double> _opacity = Tween<double>(begin: 0.35, end: 1).animate(_curve);
+
+  @override
+  void didUpdateWidget(TabSwitchTransition oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Honour the system's "remove animations" setting.
+    if (MediaQuery.disableAnimationsOf(context)) return widget.child;
+    return FadeTransition(
+      opacity: _opacity,
+      child: ScaleTransition(scale: _scale, child: widget.child),
     );
   }
 }

@@ -117,6 +117,12 @@ class SettingsScreen extends ConsumerWidget {
           onTap: () => showThemeDialog(context, ref, themeMode),
         ),
         SettingsTile(
+          icon: Icons.palette_rounded,
+          title: l10n.colorTheme,
+          subtitle: ref.watch(appPaletteProvider)?.name ?? l10n.colorThemeDynamic,
+          onTap: () => showPaletteDialog(context, ref),
+        ),
+        SettingsTile(
           icon: Icons.translate_rounded,
           title: l10n.language,
           subtitle: l10n.languageName,
