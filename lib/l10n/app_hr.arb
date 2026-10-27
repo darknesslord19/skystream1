@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Kvaliteta nije zajamčena. Izvori se slažu prema ovoj postavci, a stream s više kvaliteta reproducira se u njoj ili u najbližoj nižoj. Reprodukcija ovisi o tome što pružatelj stvarno nudi.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Glumačka postava: {names}",
   "actorRoleMain": "Glavna",
   "actorRoleSupporting": "Sporedna",
-  "actorRoleBackground": "Epizodna"
+  "actorRoleBackground": "Epizodna",
+  "playerQuality": "Kvaliteta",
+  "playerQualityAuto": "Automatski",
+  "playerQualityAutoPlaying": "Automatski · {height}",
+  "networkBufferAuto": "Automatski (preporučeno)",
+  "networkBufferAutoHint": "Veličina se određuje za svaki videozapis prema njegovoj brzini prijenosa i memoriji ovog uređaja.",
+  "devQoeLog": "QoE zapisnik",
+  "devQoeLogSubtitle": "Zapisuje vremena reprodukcije u zapisnik aplikacije",
+  "playerGoLive": "Idi na uživo",
+  "playerBehindLive": "{time} iza prijenosa uživo"
 }

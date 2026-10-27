@@ -1,4 +1,4 @@
-# Changelogs - v2.9.0-unreleased
+# Changelogs - v2.9.0
 
 ### ✨ *New Features & Enhancements*
 
@@ -37,6 +37,16 @@
 - **Subtitles from Stremio add-ons** – The player's subtitle search also asks your Stremio subtitle add-ons, and OpenSubtitles' own Stremio add-on, so a film or an episode with an IMDb id finds subtitles with no key or account.
 - **Subtitle style in the player** – A Subtitle style page in the player's Subtitles tab sets the size, colours, background, outline, position, bold, font, text opacity and encoding, on every device including TV; Settings has the same choices. Subtitle files change at once. Subtitles inside the video change from their next line, and take bold, font, text opacity and encoding the next time the player opens (PR #133 by @1eren0).
 - **Play Stremio titles from their page** – When the add-on a title came from also brings its links, as CNCVerse Bridge does, the title's page has a Play button (Resume once started, and the next episode for a show), its episodes are laid out like a CloudStream title's and play with a tap, and the player goes on to the next episode from the same add-on. Holding an episode searches every add-on for it, as Search Stremio add-ons does.
+- **Choose a stream's quality** – A stream that offers several qualities (HLS) gets a Quality tab in the player's Options: Auto, or any quality it offers, with every audio track kept. Your choice holds for the rest of that viewing, through source changes and the next episodes. Auto now follows your Wi-Fi & Wired and Mobile quality preferences, and such streams are listed at your preferred quality instead of last.
+- **Videos start sooner** – A video starts once a second of it has loaded, instead of three: MP4 files start about a second sooner.
+- **Read-ahead sized for each video** – The player reads about three minutes ahead (one on mobile data, six for very high-bitrate files), worked out from the video's bitrate, and never more than this device's memory allows. Network buffer in Player settings now offers Auto (recommended), which everyone starts on, or a fixed size.
+- **Fewer stalls on a weak connection** – On HLS streams, Auto quality steps down before the video runs out, not after.
+- **Live streams closer to live, with a rewind** – Live streams start closer to the live edge. On a live stream that keeps the last minutes, the progress bar covers them: step or drag back to catch what you missed, see how far behind live you are, and tap LIVE to catch up.
+- **One buffering spinner, everywhere** – It shows when the picture freezes, never while you drag the progress bar, and goes the moment the video moves again.
+- **Streams come back by themselves** – When the connection drops, the server stalls or the network goes, the last picture stays on screen with "Reconnecting…" or "Waiting for network…", and playback picks up where it stopped as soon as the stream is back. A source is only given up on when its server says it's gone, or another source's server answers while this one stays silent.
+- **Slow starts get their time** – A stream that is still loading isn't abandoned at 30 seconds; one that shows no sign of life is.
+- **Torrents start on the right buffer** – TorrServer now gets the buffer size SkyStream chooses for each film, instead of running on its 64 MB default, and the film is no longer held twice in memory. While a torrent prepares, the screen shows its peers, speed and how much is loaded.
+- **Season packs play the episode you picked** from Stremio add-ons, instead of the pack's first file.
 
 #### 🖥️ Interface
 - **Navigation bar** – A new frosted navigation bar on phones (PR #121 by @likhithkrishna1103-tech).
@@ -44,10 +54,28 @@
 #### 🔐 Accounts
 - **MyAnimeList and AniList sign-in inside SkyStream** – Signing in happens in the app, on every platform.
 - **Trakt's new sign-in** – Trakt now signs in through Trakt's new sign-in page. If you were signed in to Trakt before, you may be asked to connect once more.
+- **Simkl's new sign-in** – Connecting Simkl now uses Simkl's new sign-in (AUTH V2), the same code to enter on simkl.com/pin. Simkl retires the old one around April 2027; if you're already connected, you stay connected.
 
 ---
 
 ### 🐞 *Bug Fixes & System Stability*
+- 🛠️ **Fixed: switching audio or subtitles paused the video to rebuffer** – A switch now changes only the track, and the new audio plays within about a second.
+- 🛠️ **Fixed: seeks in HLS streams could be lost** – A seek, or resuming where you left off, sometimes never happened. It now lands.
+- 🛠️ **Fixed: some Android devices were taken for low-memory ones** – SkyStream read whether memory was short at that moment, not the device's own low-memory flag, and held such devices to a lower video quality.
+- 🛠️ **Fixed: leaving or switching a stream that had stopped downloading froze the app** (iPhone, iPad, Windows and Linux) – It now leaves at once, whatever the stream is doing. On iPhone, iPad and Mac, switching away from such a stream also starts the new one at once, instead of waiting for the old one to give up.
+- 🛠️ **Fixed: some streams had no Quality tab** on iPhone, iPad, Mac, Windows and Linux – Streams SkyStream relays for their headers now offer it like any other.
+- 🛠️ **Fixed: on Windows, the first video after starting the app took long to open** – The player's components are now indexed once, when SkyStream is installed or first run.
+- 🛠️ **Fixed: seeking in some HLS streams with subtitles took seconds longer** (iPhone, iPad, Mac, Windows and Linux) – A seek the player turns down is now sent again at once.
+- 🛠️ **Fixed: on Android, the first video after installing SkyStream was slow to start** – The player now builds its list of fonts in the background as soon as SkyStream first starts, instead of when that video opens.
+- 🛠️ **Fixed: on Android, video could play with sound but no picture** after the player reopened a stream.
+- 🛠️ **Fixed: on Mac, a dropped connection paused the video, and a film's end paused instead of showing the end card.**
+- 🛠️ **Fixed: on iPhone, iPad and Mac, switching streams quickly could crash or freeze the app.**
+- 🛠️ **Fixed: after a stall, HLS streams downloaded again what had already played and came back at a lower quality** – They now pick up where they stopped, at most one segment lower.
+- 🛠️ **Fixed: the "None of the sources would play" screen kept the display awake** – It now lets the screen sleep, and Retry keeps it awake again.
+- 🛠️ **Fixed: on phones, a video still loading when you left the app started playing in the background.**
+- 🛠️ **Fixed: the buffering spinner flickered on some streams while they played fine.**
+- 🛠️ **Fixed: HDR streams were ranked above others,** though SkyStream shows HDR washed out.
+- 🛠️ **Fixed: the audio and subtitle lists blinked and moved the remote's cursor while open** on some streams – The rows stay put, with the cursor where you left it.
 - 🛠️ **Fixed: a page in a sign-in or bot-check sheet couldn't be scrolled on phones** – On Android and iPhone the page scrolls under your finger, and the sheet moves by its handle only. Sheets, Home's long-press menus and the source list for an external player now open above the navigation bar instead of under it.
 - 🛠️ **Fixed: lines from a subtitle file flickered** – They no longer blink off and on or flash an earlier line, worst on HLS streams, and a short seek back shows the line it lands in (PR #132 by @1eren0).
 - 🛠️ **Fixed: posters didn't show for some sites behind a bot check** – Once SkyStream has cleared a site's check, its posters and artwork load too.
@@ -69,7 +97,8 @@
 - 🛠️ **Fixed: on Linux, the screen stopped going to sleep after playback** until SkyStream was closed.
 - 🛠️ **Fixed: on Linux, opening some streams, such as Internet Archive's, froze the app.**
 - 🛠️ **Fixed: on TV, the search screen's scope selector and first result ignored the D-pad.**
-- 🛠️ **Fixed: Stremio shows that an add-on publishes as "other" were treated as films** – Their add-ons search asked for the whole show instead of an episode, and Continue Watching couldn't reopen them.
+- 🛠️ **Fixed: Continue Watching couldn't reopen Stremio titles** – Tapping one, or View Details on a long press, opened a plugin's page that couldn't load it. It now opens the title's own page, through the add-on it came from; a title started before this update does so once it's played again.
+- 🛠️ **Fixed: Stremio shows that an add-on publishes as "other" were treated as films** – CNCVerse Bridge publishes its shows that way. Their episodes now keep their own progress and watched marks, and their page calls them a series.
 - 🛠️ **Fixed: on TV, Left could jump up to the top of a page instead of into the side navigation bar** – From a button with nothing beside it, such as Select Provider on Home, Left went to the arrows at the top. It now opens the side navigation bar.
 - 🛠️ **Fixed: on Windows, macOS and Linux, Clear cache could delete other apps' temporary files** – It now clears only SkyStream's own.
 - 🛠️ **Fixed: the Linux .deb didn't install the VLC and WebKitGTK it needs** – apt now installs them with SkyStream.

@@ -306,6 +306,50 @@ void main() {
     });
 
     test(
+      'a refresh answered with a page instead of tokens - a bot check the '
+      'app could not clear, passed on as an answer - keeps the session',
+      () async {
+        // The app's Dio hands a check it can't clear back as an ordinary answer
+        // (ClearanceInterceptor), whatever its status: no exception, and no
+        // tokens in it. That spends nothing, as a thrown 403 doesn't.
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onError: (error, handler) {
+              final response = error.response;
+              if (response?.statusCode == 403) {
+                handler.resolve(response!);
+                return;
+              }
+              handler.next(error);
+            },
+          ),
+        );
+        for (final (status, body) in [
+          (403, '<html>Just a moment...</html>'),
+          (200, '<html>Sign in to this Wi-Fi</html>'),
+        ]) {
+          final store = _FakeTokenStorage();
+          final service = serviceWith(expiredSession(), store);
+
+          adapter.reply = (options) => options.path.endsWith(_tokenUrl)
+              ? ResponseBody.fromString(
+                  body,
+                  status,
+                  headers: {
+                    Headers.contentTypeHeader: ['text/html'],
+                  },
+                )
+              : _json(const {}, status: 201);
+
+          await service.markWatched(item, episode);
+
+          expect(await service.isLoggedIn, isTrue, reason: '$status');
+          expect(store.values[refreshKey], 'good-refresh', reason: '$status');
+        }
+      },
+    );
+
+    test(
       'an app killed while it stores a refresh keeps the new refresh token',
       () async {
         // Refresh tokens are single-use: the old one is spent the moment

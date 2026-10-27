@@ -36,4 +36,19 @@ void main() {
       expect(obeysOrientationRequests(isIOS: true, isTablet: true), isFalse);
     });
   });
+
+  group('androidTier', () {
+    test("the OEM's low-RAM verdict makes a device low, whatever its RAM", () {
+      expect(androidTier(lowRam: true, physicalRamMb: 4096), DeviceTier.low);
+    });
+
+    test('without it, the RAM decides', () {
+      expect(androidTier(lowRam: false, physicalRamMb: 1536), DeviceTier.low);
+      expect(
+        androidTier(lowRam: false, physicalRamMb: 4096),
+        DeviceTier.standard,
+      );
+      expect(androidTier(lowRam: false, physicalRamMb: 8192), DeviceTier.high);
+    });
+  });
 }

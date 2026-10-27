@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Якасць не гарантуецца. Крыніцы сартуюцца паводле гэтага выбару, а паток з некалькімі якасцямі прайграецца ў ёй або ў бліжэйшай ніжэйшай. Прайграванне залежыць ад таго, што насамрэч прапануе пастаўшчык.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "У ролях: {names}",
   "actorRoleMain": "Галоўная",
   "actorRoleSupporting": "Другарадная",
-  "actorRoleBackground": "Эпізадычная"
+  "actorRoleBackground": "Эпізадычная",
+  "playerQuality": "Якасць",
+  "playerQualityAuto": "Аўта",
+  "playerQualityAutoPlaying": "Аўта · {height}",
+  "networkBufferAuto": "Аўта (рэкамендуецца)",
+  "networkBufferAutoHint": "Памер падбіраецца для кожнага відэа паводле яго бітрэйту і памяці гэтай прылады.",
+  "devQoeLog": "Журнал QoE",
+  "devQoeLogSubtitle": "Запісвае часы прайгравання ў журнал праграмы",
+  "playerGoLive": "Да прамога эфіру",
+  "playerBehindLive": "{time} ад прамога эфіру"
 }

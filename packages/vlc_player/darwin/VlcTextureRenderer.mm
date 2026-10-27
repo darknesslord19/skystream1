@@ -6,6 +6,7 @@
 #import <MobileVLCKit/MobileVLCKit.h>
 #endif
 
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -77,7 +78,10 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
   explicit CVPixelBufferSink(void (^on_frame_available)(void))
       : on_frame_available_(on_frame_available) {}
 
-  ~CVPixelBufferSink() override { Teardown(); }
+  ~CVPixelBufferSink() override {
+    DropHold();
+    Teardown();
+  }
 
   uint32_t Configure(vlc_player::VlcFrameFormat* format) override {
     Teardown();
@@ -190,10 +194,26 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      in_flight_ = buffer;
+      // Two references from here on: the pool's, which is the lock's and goes
+      // at its unlock (Release, or ReleaseOrphan once the output is detached),
+      // and the slot's. The next player's format and the renderer's detach drop
+      // only the slot's, so a copy into a locked picture never meets freed or
+      // recycled memory (FORK.md 31).
+      in_flight_ = CVPixelBufferRetain(buffer);
     }
     return buffer;
   }
+
+  /// The unlock of a picture locked before its output was detached
+  /// (VlcFrameSink::orphan_release): the lock's reference goes, and the memory
+  /// with it if nothing else holds it. Touches nothing of the sink's.
+  static void ReleaseOrphan(void* picture, void* const* /*planes*/) {
+    auto buffer = static_cast<CVPixelBufferRef>(picture);
+    CVPixelBufferUnlockBaseAddress(buffer, 0);
+    CVPixelBufferRelease(buffer);
+  }
+
+  OrphanRelease orphan_release() const override { return &ReleaseOrphan; }
 
   void Commit(void* picture) override {
     if (picture == nullptr) {
@@ -223,12 +243,13 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
     bool publish = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (in_flight_ != picture) {
-        return;
+      if (in_flight_ == picture) {
+        in_flight_released_ = true;
+        publish = in_flight_committed_;
       }
-      in_flight_released_ = true;
-      publish = in_flight_committed_;
     }
+    // The lock's reference, whether or not the slot still holds the picture.
+    CVPixelBufferRelease(buffer);
     if (publish) {
       Publish();
     }
@@ -238,10 +259,60 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
   /// the first one arrives.
   CVPixelBufferRef CopyPending() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (holding_.load()) {
+      return CVPixelBufferRetain(held_);
+    }
     // Deliberately kept rather than handed over: Flutter re-reads the texture
     // on resize and on any repaint that did not follow a new frame, and a
     // nullptr there paints a black hole where the video was.
     return pending_ == nullptr ? nullptr : CVPixelBufferRetain(pending_);
+  }
+
+  /// Keeps the picture on screen, whatever libVLC decodes next, until
+  /// ReleaseHold. False, holding nothing, before the first picture. A second
+  /// Hold while holding keeps the first picture.
+  bool Hold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (holding_.load()) {
+      // Held again for the next media, and until that one is let go: a
+      // release still pending from a media that failed, ended or was stopped
+      // before it played would end the hold at the new media's first picture,
+      // frame 0.
+      release_pending_ = false;
+      return true;
+    }
+    if (pending_ == nullptr) {
+      return false;
+    }
+    held_ = CVPixelBufferRetain(pending_);
+    release_pending_ = false;
+    holding_ = true;
+    return true;
+  }
+
+  /// Lets the hold go at the next picture libVLC finishes. See
+  /// vlc_picture_hold.h for why not at once.
+  void ReleaseHold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (holding_.load()) {
+      release_pending_ = true;
+    }
+  }
+
+  bool held() const { return holding_.load(); }
+
+  /// Drops a hold at once: the renderer is going away.
+  void DropHold() {
+    CVPixelBufferRef stale = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      std::swap(stale, held_);
+      holding_ = false;
+      release_pending_ = false;
+    }
+    if (stale != nullptr) {
+      CVPixelBufferRelease(stale);
+    }
   }
 
   void Silence() {
@@ -324,20 +395,36 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
  private:
 
   /// Moves the in-flight picture to `pending_` and wakes the embedder.
+  /// Moves the in-flight picture to `pending_` and wakes the embedder - or,
+  /// while a hold is on, drops it: the new media's picture at 0 among others.
+  /// The first picture finished after ReleaseHold ends the hold.
   void Publish() {
     CVPixelBufferRef replaced = nullptr;
+    CVPixelBufferRef released_hold = nullptr;
     void (^notify)(void) = nil;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      replaced = pending_;
-      pending_ = in_flight_;
+      if (holding_.load() && !release_pending_) {
+        replaced = in_flight_;
+      } else {
+        if (holding_.load()) {
+          holding_ = false;
+          release_pending_ = false;
+          std::swap(released_hold, held_);
+        }
+        replaced = pending_;
+        pending_ = in_flight_;
+        notify = on_frame_available_;
+      }
       in_flight_ = nullptr;
       in_flight_committed_ = false;
       in_flight_released_ = false;
-      notify = on_frame_available_;
     }
     if (replaced != nullptr) {
       CVPixelBufferRelease(replaced);
+    }
+    if (released_hold != nullptr) {
+      CVPixelBufferRelease(released_hold);
     }
     if (notify != nil) {
       @autoreleasepool {
@@ -364,6 +451,12 @@ class CVPixelBufferSink final : public vlc_player::VlcFrameSink {
   bool in_flight_released_ = false;
 
   CVPixelBufferRef pending_ = nullptr;
+  /// The picture a hold keeps on screen, retained apart from the pool's
+  /// rotation: the old video output's Cleanup and the new one's Configure both
+  /// run during a hold, and neither may take it away.
+  CVPixelBufferRef held_ = nullptr;
+  std::atomic<bool> holding_{false};
+  bool release_pending_ = false;
 };
 
 }  // namespace
@@ -449,6 +542,19 @@ static vlc_subtitle_look_function ResolveInVLCKit(const char *name) {
              : NO;
 }
 
+- (void)attachToMediaPlayer:(VLCMediaPlayer *)mediaPlayer {
+  if (_sink == nullptr || _output == nullptr) {
+    return;
+  }
+  // Detach first: the old player's video output may still close or draw one
+  // last frame, and it must find nothing to call into.
+  _output->Detach();
+  auto *player =
+      static_cast<libvlc_media_player_t *>(mediaPlayer.libVLCMediaPlayer);
+  _output =
+      std::make_unique<vlc_player::VlcVideoOutput>(player, _sink.get());
+}
+
 - (NSString *)chroma {
   return @(kChroma);
 }
@@ -461,6 +567,20 @@ static vlc_subtitle_look_function ResolveInVLCKit(const char *name) {
   return _sink == nullptr ? nullptr : _sink->CopyPending();
 }
 
+- (BOOL)holdPicture {
+  return _sink != nullptr && _sink->Hold() ? YES : NO;
+}
+
+- (void)releasePicture {
+  if (_sink != nullptr) {
+    _sink->ReleaseHold();
+  }
+}
+
+- (BOOL)pictureHeld {
+  return _sink != nullptr && _sink->held() ? YES : NO;
+}
+
 - (void)detach {
   if (_output != nullptr) {
     _output->Detach();
@@ -468,6 +588,7 @@ static vlc_subtitle_look_function ResolveInVLCKit(const char *name) {
   }
   if (_sink != nullptr) {
     _sink->Silence();
+    _sink->DropHold();
     _sink->Teardown();
   }
   self.onFrameAvailable = nil;

@@ -1,6 +1,7 @@
 #ifndef VLC_PLAYER_NATIVE_VLC_PIXEL_BUFFER_SINK_H_
 #define VLC_PLAYER_NATIVE_VLC_PIXEL_BUFFER_SINK_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -50,6 +51,18 @@ class VlcPixelBufferSink final : public VlcFrameSink {
   // The negotiated picture size, zero until Configure has run.
   void FrameSize(uint32_t* width, uint32_t* height) const;
 
+  // Keeps handing the embedder the picture it was last handed, whatever
+  // libVLC decodes next, until a ReleaseHold. False, holding nothing, when
+  // the embedder has not been handed a picture since the last format. A
+  // second Hold while holding keeps the first picture.
+  bool Hold();
+
+  // Lets the hold go at the next picture libVLC finishes, and wakes the
+  // embedder for it. See VlcPictureHold for why not at once.
+  void ReleaseHold();
+
+  bool held() const;
+
 #ifdef VLC_PLAYER_TESTING
   void ResizeForTesting(uint32_t width, uint32_t height, uint32_t pitch);
   void SimulateFrameForTesting(uint8_t value);
@@ -58,6 +71,7 @@ class VlcPixelBufferSink final : public VlcFrameSink {
   const uint8_t* TextureBufferDataForTesting() const;
   const uint8_t* RetiredBufferDataForTesting() const;
   size_t RetiredBufferSizeForTesting() const;
+  const uint8_t* RetiredFrameBufferDataForTesting() const;
   uint64_t RenderGenerationForTesting() const;
   uint64_t TextureGenerationForTesting() const;
 #endif  // VLC_PLAYER_TESTING
@@ -85,11 +99,23 @@ class VlcPixelBufferSink final : public VlcFrameSink {
   // by the next format change and by the destructor, so the cost is a single
   // extra frame of RGBA for as long as a resolution lasts.
   std::vector<uint8_t> retired_;
+  // The frame_buffer_ a format change replaced: see Resize.
+  std::vector<uint8_t> retired_frame_;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
   uint32_t pitch_ = 0;
   uint64_t render_generation_ = 0;
   uint64_t texture_generation_ = 0;
+  // The picture a hold keeps on screen: a copy, so the three rotating
+  // buffers and their sizes never mix with it. Freed by the first
+  // CopyPixels after the hold ends, which the embedder makes only once it is
+  // done with the pointer it was handed before.
+  std::vector<uint8_t> held_;
+  uint32_t held_width_ = 0;
+  uint32_t held_height_ = 0;
+  // Read without the lock by Commit, on libVLC's thread.
+  std::atomic<bool> holding_{false};
+  bool release_pending_ = false;
 };
 
 }  // namespace vlc_player

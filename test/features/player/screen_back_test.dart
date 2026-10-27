@@ -6,6 +6,7 @@ import 'package:skystream/core/services/download_service.dart';
 import 'package:skystream/features/player/presentation/vlc/next_episode_countdown.dart';
 import 'package:skystream/features/player/presentation/vlc/panel/player_panel.dart'
     show PlayerPanel;
+import 'package:skystream/features/player/presentation/vlc/source_check_provider.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart';
 import 'package:skystream/features/player/presentation/widgets/player_control_components.dart'
@@ -207,6 +208,11 @@ void main() {
         // viewer asking - hides while paused all the same.
         await pumpPlayer(tester, pushed: true);
         await sendFirstFrame(tester);
+        // The viewer's pause: a pause nobody asked for is a failure.
+        await tester
+            .widget<VlcPlayerControls>(find.byType(VlcPlayerControls))
+            .controller
+            .pause();
         await sendEvent(tester, snapshot(state: 'paused'));
         expectBarsShown(tester);
 
@@ -245,6 +251,11 @@ void main() {
         // the pop because the first never claimed the press.
         await pumpPlayer(tester, pushed: true);
         await sendFirstFrame(tester);
+        // The viewer's pause: a pause nobody asked for is a failure.
+        await tester
+            .widget<VlcPlayerControls>(find.byType(VlcPlayerControls))
+            .controller
+            .pause();
         await sendEvent(tester, snapshot(state: 'paused'));
         expectBarsShown(tester);
 
@@ -700,20 +711,20 @@ void main() {
         // one screen a viewer most wants to leave. Worse than the card, in
         // fact - _lockedBack's only feedback is _chrome.poke(), and with no
         // bars mounted that paints nothing at all, so Back reads as broken.
-        await pumpPlayer(tester, pushed: true, isTv: false);
+        // The link is gone: the one source dies for good at its first failure.
+        await pumpPlayer(
+          tester,
+          pushed: true,
+          isTv: false,
+          overrides: [sourceCheckProvider.overrideWithValue(goneCheck)],
+        );
         final l10n = await AppLocalizations.delegate.load(const Locale('en'));
 
-        // One source, so the ladder is two same-source retries and then the
-        // end of it. Each retry takes the picture down and clears the lock on
-        // its own account, which is why the lock is set again over every
-        // fresh frame: that is the state a viewer's screen is really in when
-        // the third failure lands, and only the third goes to _fail.
-        for (var round = 0; round < 3; round++) {
-          await sendFirstFrame(tester);
-          await lock(tester);
-          await sendEvent(tester, snapshot(state: 'error'));
-          await settle(tester);
-        }
+        // One source, and its link is gone: its first failure is the last.
+        await sendFirstFrame(tester);
+        await lock(tester);
+        await sendEvent(tester, snapshot(state: 'error'));
+        await settle(tester);
 
         expect(
           find.text(l10n.retry),

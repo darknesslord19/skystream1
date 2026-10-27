@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Kvalita není zaručena. Zdroje se řadí podle této předvolby a stream s více kvalitami se přehrává v ní nebo v nejbližší nižší. Přehrávání závisí na tom, co poskytovatel skutečně nabízí.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Hrají: {names}",
   "actorRoleMain": "Hlavní",
   "actorRoleSupporting": "Vedlejší",
-  "actorRoleBackground": "Epizodní"
+  "actorRoleBackground": "Epizodní",
+  "playerQuality": "Kvalita",
+  "playerQualityAuto": "Automaticky",
+  "playerQualityAutoPlaying": "Automaticky · {height}",
+  "networkBufferAuto": "Automaticky (doporučeno)",
+  "networkBufferAutoHint": "Velikost se volí pro každé video podle jeho datového toku a paměti tohoto zařízení.",
+  "devQoeLog": "Protokol QoE",
+  "devQoeLogSubtitle": "Zapisuje časy přehrávání do protokolu aplikace",
+  "playerGoLive": "Přejít na živé vysílání",
+  "playerBehindLive": "{time} za živým vysíláním"
 }

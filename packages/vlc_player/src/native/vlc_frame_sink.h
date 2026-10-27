@@ -60,6 +60,16 @@ class VlcFrameSink {
 
   // libVLC has finished writing `picture`.
   virtual void Release(void* picture, void* const* planes) = 0;
+
+  // Lets go of a picture Acquire handed out whose Release comes after the
+  // output was detached. With a player per source, the old player's output can
+  // still be copying into the picture it locked when the next player's format
+  // reaches this sink, or when the sink's owner goes; a Detach stops the next
+  // lock, not that copy. VlcVideoOutput keeps this function in its attachment,
+  // which outlives the sink, so it must not touch the sink. nullptr: the sink's
+  // pictures need nothing released.
+  using OrphanRelease = void (*)(void* picture, void* const* planes);
+  virtual OrphanRelease orphan_release() const { return nullptr; }
 };
 
 }  // namespace vlc_player

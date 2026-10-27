@@ -1382,7 +1382,7 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Kvalita není zaručena. Zdroje se řadí podle této předvolby a stream s více kvalitami se přehrává v ní nebo v nejbližší nižší. Přehrávání závisí na tom, co poskytovatel skutečně nabízí.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1510,6 +1510,16 @@ class AppLocalizationsCs extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1554,6 +1564,9 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2386,4 +2399,37 @@ class AppLocalizationsCs extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Epizodní';
+
+  @override
+  String get playerQuality => 'Kvalita';
+
+  @override
+  String get playerQualityAuto => 'Automaticky';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automaticky · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automaticky (doporučeno)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Velikost se volí pro každé video podle jeho datového toku a paměti tohoto zařízení.';
+
+  @override
+  String get devQoeLog => 'Protokol QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Zapisuje časy přehrávání do protokolu aplikace';
+
+  @override
+  String get playerGoLive => 'Přejít na živé vysílání';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time za živým vysíláním';
+  }
 }

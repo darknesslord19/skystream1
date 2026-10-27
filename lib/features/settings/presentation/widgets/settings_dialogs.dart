@@ -654,48 +654,63 @@ void showGestureDialog(
   );
 }
 
-/// Shows a dialog to pick the seek duration.
-/// Picks how much of a stream to hold in memory.
-///
-/// [current] is the size in force, which is this device's default until the
-/// viewer picks something. Picking stores the number, so it then follows them
-/// rather than the hardware.
-void showNetworkBufferDialog(BuildContext context, WidgetRef ref, int current) {
+/// Picks the read-ahead size: Auto, which sizes it for each video, or one of
+/// [kNetworkBufferChoicesMb]. [current] is the size picked, or null for Auto.
+void showNetworkBufferDialog(
+  BuildContext context,
+  WidgetRef ref,
+  int? current,
+) {
   final l10n = AppLocalizations.of(context)!;
-  const options = kNetworkBufferChoicesMb;
+  // Auto's row, as a radio value: no real size is 0.
+  const auto = 0;
+  final selected = current ?? auto;
+  final options = <({int mb, String? detail})>[
+    (mb: auto, detail: l10n.networkBufferAutoHint),
+    for (final mb in kNetworkBufferChoicesMb) (mb: mb, detail: null),
+  ];
+  void choose(BuildContext ctx, int mb) {
+    unawaited(
+      ref
+          .read(playerSettingsProvider.notifier)
+          .setBufferOverrideMb(mb == auto ? null : mb),
+    );
+    Navigator.pop<void>(ctx);
+  }
 
   showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
+    builder: (ctx) => AlertDialog(
       surfaceTintColor: Colors.transparent,
       title: Text(l10n.selectNetworkBuffer),
       content: RadioGroup<int>(
-        groupValue: current,
+        groupValue: selected,
         onChanged: (val) {
           if (val == null) return;
-          ref.read(playerSettingsProvider.notifier).setNetworkBufferMb(val);
-          Navigator.pop<void>(context);
+          choose(ctx, val);
         },
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: options.map((mb) {
-              final bool isCurrent = mb == current;
-              return currentOption(
-                isCurrent: isCurrent,
-                child: ListTile(
-                  autofocus: isCurrent,
-                  title: Text(formatNetworkBuffer(mb)),
-                  leading: Radio<int>(value: mb),
-                  onTap: () {
-                    ref
-                        .read(playerSettingsProvider.notifier)
-                        .setNetworkBufferMb(mb);
-                    Navigator.pop<void>(context);
-                  },
+            children: [
+              for (final option in options)
+                currentOption(
+                  isCurrent: option.mb == selected,
+                  child: ListTile(
+                    autofocus: option.mb == selected,
+                    title: Text(
+                      option.mb == auto
+                          ? l10n.networkBufferAuto
+                          : formatNetworkBuffer(option.mb),
+                    ),
+                    subtitle: option.detail == null
+                        ? null
+                        : Text(option.detail!),
+                    leading: Radio<int>(value: option.mb),
+                    onTap: () => choose(ctx, option.mb),
+                  ),
                 ),
-              );
-            }).toList(),
+            ],
           ),
         ),
       ),

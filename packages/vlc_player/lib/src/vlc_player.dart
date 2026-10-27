@@ -320,7 +320,7 @@ class _VlcPlayerState extends State<VlcPlayer> {
     if (_isDisposed ||
         generation != _textureGeneration ||
         widget.controller != controller) {
-      await _detachPlayer(controller);
+      await _detachPlayer(controller, textureId: textureId);
     }
     return textureId;
   }
@@ -337,8 +337,15 @@ class _VlcPlayerState extends State<VlcPlayer> {
   /// A controller swap detaches the outgoing controller unconditionally: that
   /// one is being abandoned wholesale, and its view id is not ours to reason
   /// about.
-  Future<void> _detachPlayer(VlcPlayerController controller, {int? viewId}) {
-    return (controller as VlcPlayerControllerInternals).detach(viewId: viewId);
+  Future<void> _detachPlayer(
+    VlcPlayerController controller, {
+    int? viewId,
+    int? textureId,
+  }) {
+    return (controller as VlcPlayerControllerInternals).detach(
+      viewId: viewId,
+      textureId: textureId,
+    );
   }
 
   /// How far short of the decoder padding the clip has to stop, measured in

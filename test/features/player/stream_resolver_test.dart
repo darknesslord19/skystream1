@@ -752,6 +752,82 @@ void main() {
       },
     );
 
+    // The buffer rule sizes a file from its length over its runtime (spec
+    // 1.2), and the check is the one request that sees the length.
+    test(
+      'the size a ranged answer gives is kept for the buffer rule',
+      () async {
+        const sized = StreamResult(
+          url: 'https://cdn.test/sized.mkv',
+          source: 'A',
+        );
+        await probe(
+          sized,
+          (_) async => http.Response(
+            'x',
+            206,
+            headers: {
+              'content-type': 'video/x-matroska',
+              'content-range': 'bytes 0-0/19986728180',
+            },
+          ),
+        );
+        expect(probedSizeOf(sized.url), 19986728180);
+      },
+    );
+
+    test('so is the length of a server that sends the whole file', () async {
+      const whole = StreamResult(
+        url: 'https://cdn.test/whole.mkv',
+        source: 'A',
+      );
+      await probe(
+        whole,
+        (_) async => http.Response(
+          'the first bytes of the file',
+          200,
+          headers: {
+            'content-type': 'video/mkv',
+            'content-length': '7340032000',
+          },
+        ),
+      );
+      expect(probedSizeOf(whole.url), 7340032000);
+    });
+
+    test('a web page or a playlist leaves no size', () async {
+      const page = StreamResult(url: 'https://cdn.test/page.mkv', source: 'A');
+      await probe(
+        page,
+        (_) async => http.Response(
+          '<!DOCTYPE html><html></html>',
+          200,
+          headers: {'content-type': 'text/html', 'content-length': '28'},
+        ),
+      );
+      const list = StreamResult(
+        url: 'https://cdn.test/sized.m3u8',
+        source: 'A',
+      );
+      await probe(
+        list,
+        (_) async => http.Response(
+          '#EXTM3U\n',
+          200,
+          headers: {
+            'content-type': 'application/vnd.apple.mpegurl',
+            'content-length': '8',
+          },
+        ),
+      );
+      expect((probedSizeOf(page.url), probedSizeOf(list.url)), (null, null));
+    });
+
+    test('a range with an unknown total says nothing', () {
+      expect(fileSizeFromHeaders(206, {'content-range': 'bytes 0-0/*'}), null);
+      expect(fileSizeFromHeaders(206, {'content-length': '1'}), null);
+    });
+
     test('a playlist needs no ranges to be sought in', () async {
       final outcome = await probe(
         const StreamResult(url: 'https://cdn.test/a.m3u8', source: 'A'),
@@ -959,6 +1035,33 @@ void main() {
     test('a bare path counts only when the source says Torrent', () {
       expect(isTorrentSource(s('/downloads/movie.mkv', 'Torrent')), isTrue);
       expect(isTorrentSource(s('/Users/me/Movies/a.mkv', 'Video')), isFalse);
+    });
+  });
+
+  group('isUncheckableSource', () {
+    test("covers a file TorrServer serves from a torrent it holds", () {
+      // A pack file the viewer picked: its loopback address answers only
+      // while that torrent is loaded, and a dead desktop server would read as
+      // a network wait of five minutes.
+      expect(
+        isUncheckableSource(
+          const StreamResult(
+            url: 'http://127.0.0.1:8090/stream?link=abc&index=2&play',
+            source: 'Torrent (S01E02.mkv)',
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        isUncheckableSource(
+          const StreamResult(
+            url: 'http://192.168.1.5:8090/stream?link=abc&index=2',
+            source: 'LAN',
+          ),
+        ),
+        isFalse,
+        reason: "another machine's server is a server like any other",
+      );
     });
   });
 }

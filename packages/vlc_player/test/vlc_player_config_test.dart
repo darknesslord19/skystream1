@@ -42,6 +42,13 @@ void main() {
       ]);
     });
 
+    test('emits predictive, the logic HLS Auto uses', () {
+      const config = VlcNetworkConfig(
+        adaptiveLogic: VlcAdaptiveLogic.predictive,
+      );
+      expect(config.toOptions(), <String>['--adaptive-logic=predictive']);
+    });
+
     // libVLC 3 already puts prefetch in front of every network access as its
     // cache stage (src/input/access.c). Naming it again stacked a second,
     // identical filter, and each allocates the whole size up front - so the

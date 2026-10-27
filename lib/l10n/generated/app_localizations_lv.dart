@@ -1379,7 +1379,7 @@ class AppLocalizationsLv extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Kvalitāte netiek garantēta. Avoti tiek kārtoti pēc šīs preferences, un straume ar vairākām kvalitātēm tiek atskaņota šajā vai tuvākajā zemākajā. Atskaņošana ir atkarīga no tā, ko nodrošinātājs patiešām piedāvā.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1507,6 +1507,16 @@ class AppLocalizationsLv extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1551,6 +1561,9 @@ class AppLocalizationsLv extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2384,4 +2397,37 @@ class AppLocalizationsLv extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Epizodiskā';
+
+  @override
+  String get playerQuality => 'Kvalitāte';
+
+  @override
+  String get playerQualityAuto => 'Automātiski';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automātiski · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automātiski (ieteicams)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Izmērs katram video tiek noteikts pēc tā bitu pārraides ātruma un šīs ierīces atmiņas.';
+
+  @override
+  String get devQoeLog => 'QoE žurnāls';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Ieraksta atskaņošanas laikus lietotnes žurnālā';
+
+  @override
+  String get playerGoLive => 'Uz tiešraidi';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time aiz tiešraides';
+  }
 }

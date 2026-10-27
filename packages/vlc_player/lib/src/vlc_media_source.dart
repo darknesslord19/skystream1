@@ -15,12 +15,13 @@ class VlcMediaSource {
   /// network. [mediaOptions] are passed to VLC for this source only; use VLC
   /// option syntax such as `:network-caching=1200`. [startPosition] must be
   /// non-negative and is applied after the source is loaded when the platform
-  /// backend supports seeking.
+  /// backend supports seeking. [isLive] says the media is a live stream.
   VlcMediaSource({
     required this.uri,
     Map<String, String> httpHeaders = const <String, String>{},
     List<String> mediaOptions = const <String>[],
     this.startPosition = Duration.zero,
+    this.isLive = false,
   }) : httpHeaders = Map<String, String>.unmodifiable(httpHeaders),
        mediaOptions = List<String>.unmodifiable(mediaOptions) {
     if (uri.toString().isEmpty) {
@@ -57,6 +58,14 @@ class VlcMediaSource {
   /// Initial playback position requested after loading this source.
   final Duration startPosition;
 
+  /// Whether this media is a live stream, which only its host knows: libVLC
+  /// reports a live HLS window like any media's length.
+  ///
+  /// For a live stream whose window libVLC counts from where it was joined,
+  /// the controller works out `VlcPlayerValue.positionFraction` from the
+  /// window moving on since; see `VlcPlayerController.seekToWindowFraction`.
+  final bool isLive;
+
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
@@ -64,7 +73,8 @@ class VlcMediaSource {
             other.uri == uri &&
             mapEquals(other.httpHeaders, httpHeaders) &&
             listEquals(other.mediaOptions, mediaOptions) &&
-            other.startPosition == startPosition;
+            other.startPosition == startPosition &&
+            other.isLive == isLive;
   }
 
   @override
@@ -73,6 +83,7 @@ class VlcMediaSource {
     Object.hashAll(_sortedHeaderHashes),
     Object.hashAll(mediaOptions),
     startPosition,
+    isLive,
   );
 
   Iterable<int> get _sortedHeaderHashes {
@@ -83,6 +94,7 @@ class VlcMediaSource {
   @override
   String toString() {
     return 'VlcMediaSource(uri: $uri, httpHeaders: $httpHeaders, '
-        'mediaOptions: $mediaOptions, startPosition: $startPosition)';
+        'mediaOptions: $mediaOptions, startPosition: $startPosition, '
+        'isLive: $isLive)';
   }
 }

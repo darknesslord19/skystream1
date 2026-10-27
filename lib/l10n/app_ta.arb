@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "தரத்திற்கு உத்தரவாதம் இல்லை. மூலங்கள் இந்த விருப்பத்தின்படி வரிசைப்படுத்தப்படும், பல தரங்களைக் கொண்ட ஸ்ட்ரீம் இந்தத் தரத்தில் அல்லது அதற்குக் கீழே உள்ள மிக அருகிலுள்ள தரத்தில் இயங்கும். இயக்கம் வழங்குநர் உண்மையில் என்ன வழங்குகிறார் என்பதைப் பொறுத்தது.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "நடிகர்கள்: {names}",
   "actorRoleMain": "முதன்மை",
   "actorRoleSupporting": "துணை",
-  "actorRoleBackground": "பின்னணி"
+  "actorRoleBackground": "பின்னணி",
+  "playerQuality": "தரம்",
+  "playerQualityAuto": "தானியங்கி",
+  "playerQualityAutoPlaying": "தானியங்கி · {height}",
+  "networkBufferAuto": "தானியங்கி (பரிந்துரைக்கப்பட்டது)",
+  "networkBufferAutoHint": "ஒவ்வொரு வீடியோவுக்கும் அதன் பிட்ரேட் மற்றும் இந்தச் சாதனத்தின் நினைவகத்தைப் பொறுத்து அளவு அமைகிறது.",
+  "devQoeLog": "QoE பதிவு",
+  "devQoeLogSubtitle": "இயக்க நேரங்களை ஆப்ஸ் பதிவில் எழுதுகிறது",
+  "playerGoLive": "நேரலைக்குச் செல்",
+  "playerBehindLive": "நேரலையை விட {time} பின்னால்"
 }

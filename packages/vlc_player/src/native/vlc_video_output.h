@@ -46,6 +46,9 @@ class VlcVideoOutput {
   struct Attachment {
     std::mutex mutex;
     VlcFrameSink* sink = nullptr;
+    // The sink's OrphanRelease: a picture locked before Detach is let go at
+    // its unlock, after it.
+    VlcFrameSink::OrphanRelease orphan_release = nullptr;
     // The last layout the sink agreed to, kept so a lock the sink cannot
     // answer still has somewhere legal to point libVLC. See ScratchBin.
     uint32_t plane_count = 0;

@@ -30,8 +30,16 @@ class SyncConfig {
   /// there: lib/features/tracking/sign_in/.
   static const String signInRedirect = 'http://localhost';
 
+  /// Simkl's V1 app: its PIN sign-in, and the sessions signed in with it,
+  /// which keep working until Simkl turns V1 off (about April 2027).
   static const String simklClientId = String.fromEnvironment('SIMKL_CLIENT_ID');
   static const String simklClientSecret = String.fromEnvironment(
     'SIMKL_CLIENT_SECRET',
+  );
+
+  /// Simkl's AUTH V2 app, a public client: every new sign-in, by device code,
+  /// with no secret. A build without it signs in on V1 as before.
+  static const String simklV2ClientId = String.fromEnvironment(
+    'SIMKL_V2_CLIENT_ID',
   );
 }

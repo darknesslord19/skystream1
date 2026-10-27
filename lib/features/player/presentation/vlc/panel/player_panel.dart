@@ -1,6 +1,6 @@
-/// The player's side panel: Sources, Audio, Subtitles, Episodes and Files in
-/// one right-anchored drawer instead of four bottom sheets. The shape lives in
-/// player_panel_shell.dart.
+/// The player's side panel: Sources, Quality, Audio, Subtitles, Episodes and
+/// Files in one right-anchored drawer instead of four bottom sheets. The shape
+/// lives in player_panel_shell.dart.
 ///
 /// Opening moves focus onto the row that is selected now, not row one. Closing
 /// returns focus to the control that opened the panel, which falls out of the
@@ -35,7 +35,8 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/foundation.dart'
+    show SynchronousFuture, ValueListenable, listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vlc_player/vlc_player.dart';
@@ -52,6 +53,7 @@ import 'player_panel_metrics.dart';
 import 'player_panel_page.dart';
 import 'player_panel_row.dart';
 import 'player_panel_shell.dart';
+import 'player_quality_tab.dart';
 import 'player_sources_tab.dart';
 import 'player_subtitle_style_page.dart';
 import 'player_tracks_tab.dart';
@@ -62,20 +64,23 @@ export 'player_panel_data.dart'
 export 'player_subtitle_style_page.dart' show SubtitleStyleBinding;
 
 /// The panel's tabs, in the order they are shown.
-enum PlayerPanelTab { sources, audio, subtitles, episodes, files }
+enum PlayerPanelTab { sources, quality, audio, subtitles, episodes, files }
 
 /// Which tabs the panel would show for these lists. The panel strip and the
 /// bottom-bar buttons both read this, so a button can never open a tab that
 /// does not exist.
 ///
 /// Audio and Subtitles are always present: an empty list is still something to
-/// say. One episode or one file is not a choice, so neither gets a tab.
+/// say. One episode or one file is not a choice, so neither gets a tab - and
+/// neither does a stream with one quality, or a stream that is not HLS.
 Set<PlayerPanelTab> availablePanelTabs({
   required int sourceCount,
   required int episodeCount,
   required int fileCount,
+  int qualityCount = 0,
 }) => <PlayerPanelTab>{
   if (sourceCount > 0) PlayerPanelTab.sources,
+  if (qualityCount > 1) PlayerPanelTab.quality,
   PlayerPanelTab.audio,
   PlayerPanelTab.subtitles,
   if (episodeCount > 1) PlayerPanelTab.episodes,
@@ -106,6 +111,9 @@ Set<PlayerPanelTab> availablePanelTabs({
 ///
 /// [subtitleStyle] is the viewer's subtitle settings, for the Subtitles tab's
 /// Subtitle style page - see [PlayerTracksTab.subtitleStyle].
+///
+/// [onPickQuality] hears the quality the viewer picked in the Quality tab: a
+/// height, or null for Auto. The panel closes first, as for a source.
 Future<void> showPlayerPanel(
   BuildContext context, {
   required VlcPlayerController controller,
@@ -114,6 +122,7 @@ Future<void> showPlayerPanel(
   bool isTv = false,
   bool focusOnOpen = false,
   ValueChanged<int>? onPickSource,
+  ValueChanged<int?>? onPickQuality,
   ValueChanged<Episode>? onPickEpisode,
   ValueChanged<TorrentFile>? onPickFile,
   ValueChanged<BuildContext>? onOpened,
@@ -134,6 +143,7 @@ Future<void> showPlayerPanel(
           isTv: isTv,
           focusOnOpen: focusOnOpen,
           onPickSource: onPickSource,
+          onPickQuality: onPickQuality,
           onPickEpisode: onPickEpisode,
           onPickFile: onPickFile,
           episodeProgress: episodeProgress,
@@ -245,6 +255,7 @@ class PlayerPanel extends StatefulWidget {
     this.isTv = false,
     this.focusOnOpen = false,
     this.onPickSource,
+    this.onPickQuality,
     this.onPickEpisode,
     this.onPickFile,
     this.episodeProgress,
@@ -269,6 +280,10 @@ class PlayerPanel extends StatefulWidget {
   final bool focusOnOpen;
 
   final ValueChanged<int>? onPickSource;
+
+  /// The quality picked in the Quality tab: a height, or null for Auto.
+  final ValueChanged<int?>? onPickQuality;
+
   final ValueChanged<Episode>? onPickEpisode;
   final ValueChanged<TorrentFile>? onPickFile;
 
@@ -313,6 +328,17 @@ class _PlayerPanelState extends State<PlayerPanel> {
 
   late Future<_PanelTracks> _tracks;
 
+  /// The lists on screen, kept while a revision move reads them again: the
+  /// answer replaces them only if it differs, in place.
+  _PanelTracks? _shownTracks;
+
+  /// Counts the background reads, so only the newest one lands.
+  int _refreshes = 0;
+
+  /// Set when the tab hands the engine a track the viewer brought: the first
+  /// answer with a row the lists on screen lack re-anchors, as a reload does.
+  bool _trackOnItsWay = false;
+
   /// The engine's track revision the list was last read under. The engine owns
   /// both the list and the selection, so when the revision moves - a side-car
   /// landing after the panel opened, a stream announcing its audio late - the
@@ -354,7 +380,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
     _shown = _tab;
     _seenRevision = widget.controller.value.trackRevision;
     widget.controller.addListener(_onEngine);
-    _tracks = _loadTracks();
+    _tracks = _loadTracks().then(_show)..ignore();
   }
 
   @override
@@ -382,7 +408,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
     final revision = widget.controller.value.trackRevision;
     if (revision == _seenRevision || !mounted) return;
     _seenRevision = revision;
-    _reloadTracks();
+    _refreshTracks();
   }
 
   /// Read when the viewer asks for them, the only point at which the engine's
@@ -400,16 +426,51 @@ class _PlayerPanelState extends State<PlayerPanel> {
     return _PanelTracks(audio: audio, subtitle: subtitle, info: info);
   }
 
-  /// Re-reads the lists, from Retry or from the engine's revision moving. The
-  /// rows remount and re-anchor on the active one.
+  /// Remembers [tracks] as the lists on screen.
+  _PanelTracks _show(_PanelTracks tracks) => _shownTracks = tracks;
+
+  /// Re-reads the lists from Retry, a track the tab changed, or another
+  /// controller. The rows remount and re-anchor on the active one.
   void _reloadTracks() {
     // Block body on purpose: `=> setState(() => _tracks = _loadTracks())`
     // returns the assigned Future out of the callback, which trips setState's
     // own assertion before it ever calls markNeedsBuild.
     setState(() {
-      _tracks = _loadTracks();
+      // Handled here as well as by the list: a read the panel outlives fails
+      // with nobody left to hear it, and the list still shows the error.
+      _tracks = _loadTracks().then(_show)..ignore();
       _reloadedSinceSwitch = true;
     });
+  }
+
+  /// Reads the lists again for a revision move, keeping the rows: a changed
+  /// answer is swapped in place, through a SynchronousFuture so the builder
+  /// skips its waiting frame, and an unchanged or failed one leaves them, with
+  /// focus and scroll where the viewer had them.
+  void _refreshTracks() {
+    final asked = ++_refreshes;
+    _loadTracks().then((tracks) {
+      if (!mounted || asked != _refreshes || tracks == _shownTracks) return;
+      final landed = _trackOnItsWay && _hasNewRow(tracks);
+      if (landed) _trackOnItsWay = false;
+      setState(() {
+        _shownTracks = tracks;
+        // The track the viewer just brought: the rows remount on what is
+        // playing now, through the builder's waiting frame, as a reload does.
+        _tracks = landed
+            ? Future<_PanelTracks>.value(tracks)
+            : SynchronousFuture<_PanelTracks>(tracks);
+        if (landed) _reloadedSinceSwitch = true;
+      });
+    }, onError: (Object _) {});
+  }
+
+  /// Whether [tracks] lists a row the lists on screen don't.
+  bool _hasNewRow(_PanelTracks tracks) {
+    final shown = _shownTracks;
+    if (shown == null) return true;
+    return tracks.audio.any((track) => !shown.audio.contains(track)) ||
+        tracks.subtitle.any((track) => !shown.subtitle.contains(track));
   }
 
   /// The tabs [data] would show, in enum order - the same helper the bottom
@@ -762,6 +823,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
 
   String _tabLabel(AppLocalizations l10n, PlayerPanelTab tab) => switch (tab) {
     PlayerPanelTab.sources => l10n.sources,
+    PlayerPanelTab.quality => l10n.playerQuality,
     PlayerPanelTab.audio => l10n.audio,
     PlayerPanelTab.subtitles => l10n.subtitles,
     PlayerPanelTab.episodes => l10n.episodes,
@@ -800,6 +862,22 @@ class _PlayerPanelState extends State<PlayerPanel> {
           onPick: (index) {
             widget.onClose();
             widget.onPickSource?.call(index);
+          },
+        );
+      case PlayerPanelTab.quality:
+        return PlayerQualityTab(
+          controller: widget.controller,
+          ladder: data.qualityLadder,
+          pick: data.qualityPick,
+          anchorRow: qualityAnchorRow(
+            _opened.qualityPick,
+            _opened.qualityLadder,
+          ),
+          autofocus: autofocus,
+          // Close first, then pick: the reopen is the viewer's to watch.
+          onPick: (height) {
+            widget.onClose();
+            widget.onPickQuality?.call(height);
           },
         );
       case PlayerPanelTab.audio:
@@ -877,6 +955,7 @@ class _PlayerPanelState extends State<PlayerPanel> {
           autofocus: autofocus,
           onTracksChanged: _reloadTracks,
           onOpenPage: _openPage,
+          onTrackAdded: () => _trackOnItsWay = true,
           searchFocusNode: isAudio ? null : _searchRow,
           subtitleStyle: isAudio ? null : widget.subtitleStyle,
           styleFocusNode: isAudio ? null : _styleRow,
@@ -896,6 +975,17 @@ class _PanelTracks {
 
   /// Null when the engine would not answer. Only ever used for detail.
   final VlcMediaInfo? info;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PanelTracks &&
+      listEquals(other.audio, audio) &&
+      listEquals(other.subtitle, subtitle) &&
+      other.info == info;
+
+  @override
+  int get hashCode =>
+      Object.hash(Object.hashAll(audio), Object.hashAll(subtitle), info);
 }
 
 /// A tab header: one focus stop, activated by tap or Select.

@@ -177,6 +177,12 @@ void main() {
       );
       expect(torrent!.isTorrent, isTrue);
       expect(torrent.url, startsWith('magnet:?xt=urn:btih:abc123'));
+      final episode = NuvioStreamResult.fromJson(
+        const {'title': 'y', 'infoHash': 'abc123', 'fileIdx': 4},
+        scraperId: 's',
+        scraperName: 'S',
+      );
+      expect(episode!.url, endsWith('&so=4'));
 
       expect(
         NuvioStreamResult.fromJson(

@@ -248,6 +248,8 @@ void main() {
       expect(stream.magnetUri, contains('magnet:?xt=urn:btih:abc123'));
       expect(stream.magnetUri, contains('tracker.one'));
       expect(stream.magnetUri, isNot(contains('dht:')));
+      // The episode a season pack's row was for (BEP 53's select-only).
+      expect(stream.magnetUri, contains('&so=2'));
     });
 
     test('parses quality, HDR, size and seeders from free text', () {

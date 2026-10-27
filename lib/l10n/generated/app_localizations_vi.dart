@@ -1362,7 +1362,7 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Chất lượng không được đảm bảo. Các nguồn được sắp xếp theo lựa chọn này, và luồng có nhiều chất lượng sẽ phát ở chất lượng này hoặc mức gần nhất bên dưới. Việc phát phụ thuộc vào những gì nhà cung cấp thực sự cung cấp.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1490,6 +1490,16 @@ class AppLocalizationsVi extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1534,6 +1544,9 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2366,4 +2379,36 @@ class AppLocalizationsVi extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Quần chúng';
+
+  @override
+  String get playerQuality => 'Chất lượng';
+
+  @override
+  String get playerQualityAuto => 'Tự động';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Tự động · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Tự động (khuyên dùng)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Được định cỡ cho từng video theo tốc độ bit của nó và bộ nhớ của thiết bị này.';
+
+  @override
+  String get devQoeLog => 'Nhật ký QoE';
+
+  @override
+  String get devQoeLogSubtitle => 'Ghi thời gian phát vào nhật ký ứng dụng';
+
+  @override
+  String get playerGoLive => 'Đến trực tiếp';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'Chậm $time so với trực tiếp';
+  }
 }

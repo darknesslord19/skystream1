@@ -302,6 +302,14 @@ class StorageService {
     return _settingsBox.get('dev_load_assets', defaultValue: false) as bool;
   }
 
+  Future<void> setDevQoeLog(bool enabled) async {
+    await _settingsBox.put('dev_qoe_log', enabled);
+  }
+
+  bool getDevQoeLog() {
+    return _settingsBox.get('dev_qoe_log', defaultValue: false) as bool;
+  }
+
   // --- Active Provider ---
 
   Future<void> setActiveProviderId(String? id) async {

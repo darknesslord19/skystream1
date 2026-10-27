@@ -97,9 +97,9 @@ jobs:
           # commits before the other 39 landed in a single bulk import, and
           # they still carry the fewest values left verbatim in English.
           TOP_TIER = {'hi', 'kn'}
-          # Every locale is short the same 62 keys from the player migration.
+          # Every locale is short the same 51 keys from the player migration.
           # The ratchet may fall, never rise; drop it as translations land.
-          BACKLOG = 62
+          BACKLOG = 50
 
           report = pathlib.Path('build/l10n_untranslated.json')
           if not report.exists():

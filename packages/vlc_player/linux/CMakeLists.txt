@@ -34,6 +34,7 @@ list(APPEND PLUGIN_SOURCES
   "../src/native/vlc_pixel_buffer_sink.cc"
   "../src/native/vlc_pixel_buffer_sink.h"
   "../src/native/vlc_player_core.cc"
+  "../src/native/vlc_update_pump.cc"
   "../src/native/vlc_player_core.h"
   "../src/native/vlc_player_types.h"
   "../src/native/vlc_subtitle_look.c"

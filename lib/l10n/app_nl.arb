@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API-sleutel (optioneel)",
   "enterKeyToOverrideDefault": "Sleutel invoeren om standaard te overschrijven",
   "getApiKeyFromProfile": "Haal uw API-sleutel uit uw SubSource-profiel",
-  "qualityNotGuaranteed": "Kwaliteit is niet gegarandeerd. Bronnen worden gesorteerd op voorkeur, maar weergave hangt af van het aanbod van de provider.",
+  "qualityNotGuaranteed": "Kwaliteit is niet gegarandeerd. Bronnen worden gesorteerd op deze voorkeur, en een stream met meerdere kwaliteiten speelt in deze kwaliteit of de dichtstbijzijnde lagere. Weergave hangt af van wat de provider werkelijk aanbiedt.",
   "keepSourcesOriginalOrder": "Bronnen in originele volgorde houden",
   "openLink": "Link openen",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Cast: {names}",
   "actorRoleMain": "Hoofdrol",
   "actorRoleSupporting": "Bijrol",
-  "actorRoleBackground": "Figurant"
+  "actorRoleBackground": "Figurant",
+  "playerQuality": "Kwaliteit",
+  "playerQualityAuto": "Automatisch",
+  "playerQualityAutoPlaying": "Automatisch · {height}",
+  "networkBufferAuto": "Automatisch (aanbevolen)",
+  "networkBufferAutoHint": "Per video afgestemd op de bitrate en het geheugen van dit apparaat.",
+  "devQoeLog": "QoE-logboek",
+  "devQoeLogSubtitle": "Schrijft afspeeltijden naar het app-logboek",
+  "playerGoLive": "Naar live",
+  "playerBehindLive": "{time} achter live"
 }

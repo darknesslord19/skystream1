@@ -1383,7 +1383,7 @@ class AppLocalizationsBn extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'মানের নিশ্চয়তা নেই। উৎসগুলো এই পছন্দ অনুযায়ী সাজানো হয়, আর যে স্ট্রিমে একাধিক মান থাকে তা এই মানে বা এর নিচের সবচেয়ে কাছের মানে চলে। প্লেব্যাক নির্ভর করে প্রদানকারী আসলে কী দেয় তার ওপর।';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1511,6 +1511,16 @@ class AppLocalizationsBn extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1555,6 +1565,9 @@ class AppLocalizationsBn extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2388,4 +2401,36 @@ class AppLocalizationsBn extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'গৌণ';
+
+  @override
+  String get playerQuality => 'মান';
+
+  @override
+  String get playerQualityAuto => 'অটো';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'অটো · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'স্বয়ংক্রিয় (প্রস্তাবিত)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'প্রতিটি ভিডিওর বিটরেট আর এই ডিভাইসের মেমরি অনুযায়ী আকার ঠিক হয়।';
+
+  @override
+  String get devQoeLog => 'QoE লগ';
+
+  @override
+  String get devQoeLogSubtitle => 'প্লেব্যাকের সময়গুলো অ্যাপের লগে লেখে';
+
+  @override
+  String get playerGoLive => 'লাইভে যান';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'লাইভ থেকে $time পিছিয়ে';
+  }
 }

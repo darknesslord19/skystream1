@@ -1,16 +1,33 @@
 #ifndef VLC_PLAYER_TEST_NATIVE_VLC_PLAYER_CORE_TEST_SUITE_H_
 #define VLC_PLAYER_TEST_NATIVE_VLC_PLAYER_CORE_TEST_SUITE_H_
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 
 #include "vlc_pixel_buffer_sink_test_suite.h"
+#include "vlc_picture_hold_test_suite.h"
+#include "vlc_update_pump_test_suite.h"
 #include "vlc_player_core.h"
 
 namespace vlc_player {
@@ -23,6 +40,167 @@ namespace {
 std::unique_ptr<VlcPlayerCore> MakeCore() {
   return std::make_unique<VlcPlayerCore>(VlcPlayerCoreTestOptions(), [] {});
 }
+
+#ifdef _WIN32
+using SocketHandle = SOCKET;
+constexpr SocketHandle kNoSocket = INVALID_SOCKET;
+constexpr int kSendFlags = 0;
+inline void CloseSocket(SocketHandle s) { closesocket(s); }
+// Ends a connection another thread may be blocked reading: close alone does
+// not wake that read on every platform.
+inline void EndConnection(SocketHandle s) { shutdown(s, SD_BOTH); }
+inline bool WaitToAccept(SocketHandle s, int milliseconds) {
+  WSAPOLLFD listener{s, POLLRDNORM, 0};
+  return WSAPoll(&listener, 1, milliseconds) > 0;
+}
+#else
+using SocketHandle = int;
+constexpr SocketHandle kNoSocket = -1;
+#ifdef MSG_NOSIGNAL
+constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+constexpr int kSendFlags = 0;
+#endif
+inline void CloseSocket(SocketHandle s) { close(s); }
+inline void EndConnection(SocketHandle s) { shutdown(s, SHUT_RDWR); }
+inline bool WaitToAccept(SocketHandle s, int milliseconds) {
+  pollfd listener{s, POLLIN, 0};
+  return poll(&listener, 1, milliseconds) > 0;
+}
+#endif
+
+// Serves an HLS stream whose segments stall: the playlist in full, then each
+// segment's headers and nothing more, until the server ends the connection
+// three seconds later.
+//
+// libVLC 3's adaptive module downloads on threads of its own, and the
+// input's stop does not interrupt their reads: closing an input whose segment
+// had stalled joined its thread for as long as the stall lasted (over eight
+// minutes, against this server with no end to the stall, on VLCKit's
+// libVLC, 2026-10-14). A plain file whose read stalls does not show it: that
+// read is interrupted at once.
+class StallingServer {
+ public:
+  ~StallingServer() {
+    running_ = false;
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+    if (listener_ != kNoSocket) {
+      CloseSocket(listener_);
+    }
+    for (const Client& client : clients_) {
+      EndConnection(client.socket);
+      CloseSocket(client.socket);
+    }
+  }
+
+  bool Start() {
+#ifdef _WIN32
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+      return false;
+    }
+#endif
+    listener_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener_ == kNoSocket) {
+      return false;
+    }
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listener_, reinterpret_cast<sockaddr*>(&address),
+             sizeof(address)) != 0 ||
+        listen(listener_, 8) != 0) {
+      return false;
+    }
+    socklen_t length = sizeof(address);
+    getsockname(listener_, reinterpret_cast<sockaddr*>(&address), &length);
+    port_ = ntohs(address.sin_port);
+    thread_ = std::thread([this] { Serve(); });
+    return true;
+  }
+
+  std::string Url() const {
+    return "http://127.0.0.1:" + std::to_string(port_) + "/stall.m3u8";
+  }
+
+  // Waits for the next segment request after the last one this saw: a
+  // download is then stalled.
+  bool WaitForRequest(std::chrono::seconds timeout) {
+    const int seen = requests_.load();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (requests_.load() == seen) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return true;
+  }
+
+ private:
+  struct Client {
+    SocketHandle socket;
+    // When the server ends the stall; time_point::max() for none.
+    std::chrono::steady_clock::time_point ends;
+  };
+
+  // Touches the sockets only here and, after the join, in the destructor.
+  void Serve() {
+    while (running_) {
+      EndStalls();
+      if (!WaitToAccept(listener_, 100)) {
+        continue;
+      }
+      SocketHandle client = accept(listener_, nullptr, nullptr);
+      if (client == kNoSocket) {
+        return;
+      }
+      char request[2048] = {};
+      recv(client, request, static_cast<int>(sizeof(request) - 1), 0);
+      if (std::strstr(request, ".m3u8") != nullptr) {
+        const std::string body =
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n"
+            "#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10.0,\nseg0.ts\n"
+            "#EXTINF:10.0,\nseg1.ts\n#EXT-X-ENDLIST\n";
+        const std::string reply =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/vnd.apple.mpegurl\r\n"
+            "Content-Length: " +
+            std::to_string(body.size()) + "\r\n\r\n" + body;
+        send(client, reply.data(), static_cast<int>(reply.size()), kSendFlags);
+        clients_.push_back({client, std::chrono::steady_clock::time_point::max()});
+        continue;
+      }
+      const char headers[] =
+          "HTTP/1.1 200 OK\r\nContent-Type: video/mp2t\r\n"
+          "Content-Length: 100000000\r\n\r\n";
+      send(client, headers, static_cast<int>(sizeof(headers) - 1), kSendFlags);
+      clients_.push_back(
+          {client, std::chrono::steady_clock::now() + std::chrono::seconds(3)});
+      ++requests_;
+    }
+  }
+
+  void EndStalls() {
+    const auto now = std::chrono::steady_clock::now();
+    for (Client& client : clients_) {
+      if (client.ends <= now) {
+        EndConnection(client.socket);
+        client.ends = std::chrono::steady_clock::time_point::max();
+      }
+    }
+  }
+
+  SocketHandle listener_ = kNoSocket;
+  uint16_t port_ = 0;
+  std::thread thread_;
+  std::atomic<bool> running_{true};
+  std::atomic<int> requests_{0};
+  std::vector<Client> clients_;
+};
 
 }  // namespace
 
@@ -66,6 +244,20 @@ TEST(VlcPlayerCore, SnapshotEqualityComparesPayloadFields) {
   second = first;
   second.track_revision = 1;
   EXPECT_NE(first, second);
+}
+
+TEST(VlcPlayerCore, SnapshotsAreNumberedInTheOrderTheyAreMade) {
+  // The number is how a plugin tells a snapshot made before the last it sent
+  // (VlcSnapshotOrder, FORK.md 37). It is not what a snapshot says.
+  auto core = MakeCore();
+
+  ASSERT_TRUE(core->is_valid()) << core->error();
+  const VlcSnapshot first = core->Snapshot();
+  const VlcSnapshot second = core->Snapshot();
+
+  EXPECT_GT(first.sequence, 0u);
+  EXPECT_GT(second.sequence, first.sequence);
+  EXPECT_EQ(first, second);
 }
 
 TEST(VlcPlayerCore, SnapshotWithoutMediaReportsNoActiveTracks) {
@@ -328,6 +520,194 @@ TEST(VlcPlayerCore, DisposeIsIdempotentAndGuardsCommands) {
             "The vlc_player has been disposed.");
   EXPECT_FALSE(applied);
   EXPECT_TRUE(core->GetAudioTracks().empty());
+}
+
+TEST(VlcPlayerCore, EachSourceGetsAFreshPlayerOnTheSameSink) {
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  ASSERT_EQ(core.SetSource("file:///nonexistent-a.mp4", {}, {}, 0, false), "");
+  libvlc_media_player_t* first = core.PlayerForTesting();
+  ASSERT_EQ(core.SetSource("file:///nonexistent-b.mp4", {}, {}, 0, false), "");
+  EXPECT_NE(core.PlayerForTesting(), first)
+      << "the old player is released on a thread of its own";
+  EXPECT_EQ(core.GenerationForTesting(), 1u);
+}
+
+TEST(VlcPlayerCore, EventsOfAReplacedPlayerAreDropped) {
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  ASSERT_EQ(core.SetSource("file:///nonexistent-a.mp4", {}, {}, 0, false), "");
+  ASSERT_EQ(core.SetSource("file:///nonexistent-b.mp4", {}, {}, 0, false), "");
+  const uint64_t current = core.GenerationForTesting();
+
+  core.OnBufferingForTesting(current - 1, 40.0f);
+  EXPECT_EQ(core.Snapshot().buffering_progress, -1.0);
+  core.OnBufferingForTesting(current, 40.0f);
+  EXPECT_DOUBLE_EQ(core.Snapshot().buffering_progress, 0.4);
+  core.OnBufferingForTesting(current, 100.0f);
+  EXPECT_EQ(core.Snapshot().buffering_progress, -1.0);
+}
+
+// A source set without keepPicture ends the reported hold at once. Its output
+// still shows the held picture until the new media's first, as any texture
+// keeps its last image: a bridge the start-up view covers, not a hold (FORK.md
+// 30). The sink used to report that bridge as held.
+TEST(VlcPlayerCore, APlainSourceEndsTheReportedHoldAndBridgesThePicture) {
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  core.ResizeVideoBufferForTesting(2, 2, 8);
+  core.SimulateFrameForTesting(9);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+
+  ASSERT_EQ(core.SetSource("file:///nonexistent-a.mp4", {}, {}, 5000, false,
+                           /*keep_picture=*/true),
+            "");
+  EXPECT_TRUE(core.Snapshot().picture_held);
+
+  ASSERT_EQ(core.SetSource("file:///nonexistent-b.mp4", {}, {}, 0, false), "");
+  EXPECT_FALSE(core.Snapshot().picture_held)
+      << "a source set without keepPicture ends the hold at once";
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 9u) << "the old picture stays until the new media's";
+
+  // A picture libVLC finishes, through the sink's own callbacks.
+  VlcPixelBufferSink* sink = core.FrameSinkForTesting();
+  void* planes[1] = {nullptr};
+  void* picture = sink->Acquire(planes);
+  ASSERT_NE(picture, nullptr);
+  static_cast<uint8_t*>(planes[0])[0] = 21;
+  sink->Release(picture, planes);
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 21u);
+}
+
+// A reopen that fails before it plays keeps the hold, and the picture, until
+// the next source decides: the recovery's next reopen carries it on, and its
+// own first time after its Opening ends it.
+TEST(VlcPlayerCore, AHeldReopenThatFailsBeforeItPlaysKeepsTheHold) {
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  core.ResizeVideoBufferForTesting(2, 2, 8);
+  core.SimulateFrameForTesting(9);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  ASSERT_EQ(core.SetSource("file:///nonexistent-a.mp4", {}, {}, 5000, false,
+                           /*keep_picture=*/true),
+            "");
+  const uint64_t failing = core.GenerationForTesting();
+
+  core.OnOpeningForTesting(failing);
+  core.OnMediaGoneForTesting(failing);
+  EXPECT_TRUE(core.Snapshot().picture_held)
+      << "the held picture is still what is shown";
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 9u);
+
+  ASSERT_EQ(core.SetSource("file:///nonexistent-b.mp4", {}, {}, 5000, false,
+                           /*keep_picture=*/true),
+            "");
+  const uint64_t next = core.GenerationForTesting();
+  EXPECT_TRUE(core.Snapshot().picture_held);
+  core.OnTimeChangedForTesting(next);
+  EXPECT_TRUE(core.Snapshot().picture_held)
+      << "a time before the new media's Opening says nothing about it";
+  core.OnOpeningForTesting(next);
+  core.OnTimeChangedForTesting(next);
+  EXPECT_FALSE(core.Snapshot().picture_held);
+}
+
+// The time report that ends a hold asks for a snapshot, and that snapshot
+// already says the hold is over, with the size the new media's output
+// negotiated: Dart lays the picture out at the shape the value carries. The
+// pixels follow at the next picture libVLC finishes.
+TEST(VlcPlayerCore, TheHoldEndsInTheTimeReportsOwnSnapshotWithTheNewSize) {
+  // Atomic: libVLC calls back on its own threads.
+  std::atomic<int> changes{0};
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {},
+                     [&changes] { ++changes; });
+  ASSERT_TRUE(core.is_valid());
+  core.ResizeVideoBufferForTesting(4, 2, 16);
+  core.SimulateFrameForTesting(9);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  ASSERT_EQ(core.SetSource("file:///nonexistent-a.mp4", {}, {}, 5000, false,
+                           /*keep_picture=*/true),
+            "");
+  const uint64_t current = core.GenerationForTesting();
+  // The new media's output negotiates its own size while the hold is on.
+  core.ResizeVideoBufferForTesting(2, 2, 8);
+  core.OnOpeningForTesting(current);
+  EXPECT_TRUE(core.Snapshot().picture_held);
+
+  const int before = changes.load();
+  core.OnTimeChangedForTesting(current);
+  EXPECT_GT(changes.load(), before) << "the time report asks for a snapshot";
+  const VlcSnapshot snapshot = core.Snapshot();
+  EXPECT_FALSE(snapshot.picture_held) << "and that snapshot ends the hold";
+  EXPECT_EQ(snapshot.video_width, 2);
+  EXPECT_EQ(snapshot.video_height, 2);
+  ASSERT_TRUE(core.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(width, 4u) << "the held picture until the next finished one";
+}
+
+TEST(VlcPlayerCore, TheLogCountsARefusedSeekAndNothingElse) {
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  core.LogForTesting(LIBVLC_DEBUG, "Seek %f to %lld", 0.5, 180000000LL);
+  EXPECT_EQ(core.Snapshot().seek_refusals, 0);
+
+  // libVLC 3.0.24's own text (input.c, Control): "%"PRId64, microseconds.
+  core.LogForTesting(LIBVLC_WARNING,
+                     "INPUT_CONTROL_SET_TIME %lld failed or not possible",
+                     180000000LL);
+  const VlcSnapshot snapshot = core.Snapshot();
+  EXPECT_EQ(snapshot.seek_refusals, 1);
+  EXPECT_EQ(snapshot.seek_refused_at, 180000);
+}
+
+TEST(VlcPlayerCore, ThePluginBankOutlivesEveryPlayer) {
+  {
+    VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+    ASSERT_TRUE(core.is_valid());
+  }
+  EXPECT_TRUE(VlcPlayerCore::PluginBankKeptForTesting());
+}
+
+// The bug spec 3 removes: leaving or switching a stream whose download has
+// stalled waited for the download, on the platform thread. A local server
+// stalls an HLS segment for three seconds; the old core's switch waited all
+// three, and the stall's whole length when it had none.
+TEST(VlcPlayerCore, SwitchingAndDisposingDoNotWaitForAStalledRead) {
+  StallingServer server;
+  ASSERT_TRUE(server.Start());
+  VlcPlayerCore core(VlcPlayerCoreTestOptions(), [] {});
+  ASSERT_TRUE(core.is_valid());
+  ASSERT_EQ(core.SetSource(server.Url(), {}, {}, 0, true), "");
+  ASSERT_TRUE(server.WaitForRequest(std::chrono::seconds(10)));
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  const auto took = [](std::chrono::steady_clock::time_point since) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - since)
+        .count();
+  };
+  auto started = std::chrono::steady_clock::now();
+  ASSERT_EQ(core.SetSource(server.Url(), {}, {}, 0, true), "");
+  const auto switched = took(started);
+  EXPECT_LT(switched, 500) << "the switch took " << switched << " ms";
+  ASSERT_TRUE(server.WaitForRequest(std::chrono::seconds(10)));
+
+  started = std::chrono::steady_clock::now();
+  core.Dispose();
+  const auto disposed = took(started);
+  EXPECT_LT(disposed, 500) << "the dispose took " << disposed << " ms";
 }
 
 }  // namespace test

@@ -8,6 +8,15 @@ class TorrentStatus {
   final int totalSize;
   final int bytesRead; // Downloaded
 
+  /// Every peer the torrent knows of, connected or not (`total_peers`).
+  final int totalPeers;
+
+  /// What the server holds of the torrent, in bytes (`loaded_size`).
+  final int loadedBytes;
+
+  /// The torrent's infohash, lowercase hex; empty when the server sent none.
+  final String hash;
+
   TorrentStatus({
     required this.title,
     required this.status,
@@ -18,6 +27,9 @@ class TorrentStatus {
     required this.totalSize,
 
     required this.bytesRead,
+    this.totalPeers = 0,
+    this.loadedBytes = 0,
+    this.hash = '',
     required this.data,
   });
 
@@ -33,6 +45,9 @@ class TorrentStatus {
       peers: (map['active_peers'] as num?)?.toInt() ?? 0,
       totalSize: (map['torrent_size'] as num?)?.toInt() ?? 0,
       bytesRead: (map['bytes_read'] as num?)?.toInt() ?? 0,
+      totalPeers: (map['total_peers'] as num?)?.toInt() ?? 0,
+      loadedBytes: (map['loaded_size'] as num?)?.toInt() ?? 0,
+      hash: map['hash']?.toString() ?? '',
       data: map,
     );
   }
@@ -41,8 +56,9 @@ class TorrentStatus {
     return "${(downloadSpeed / 1024 / 1024).toStringAsFixed(2)} MB/s";
   }
 
+  /// What the server holds of the torrent, as a share of all of it.
   double get progress {
     if (totalSize == 0) return 0.0;
-    return bytesRead / totalSize;
+    return loadedBytes / totalSize;
   }
 }

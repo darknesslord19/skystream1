@@ -80,4 +80,29 @@ void main() {
     expect(PlayerDiagnostics.verboseVlcLog, isTrue);
     expect(PlayerDiagnostics.suppressVideoSurface, isFalse);
   });
+
+  // Spec 1.9: the live delay is picked by measurement, and this is how a run
+  // asks for one.
+  group('SKYSTREAM_LIVE_DELAY_MS', () {
+    test('unset, the shipped delay stands', () {
+      env(const <String, String>{});
+      expect(PlayerDiagnostics.liveDelayMs, isNull);
+    });
+
+    test('a positive whole number of milliseconds is taken', () {
+      env(const <String, String>{'SKYSTREAM_LIVE_DELAY_MS': ' 6000 '});
+      expect(PlayerDiagnostics.liveDelayMs, 6000);
+    });
+
+    test('zero, a negative, a fraction or a word is ignored', () {
+      for (final value in const <String>['', '0', '-6000', '6.5', 'six']) {
+        env(<String, String>{'SKYSTREAM_LIVE_DELAY_MS': value});
+        expect(
+          PlayerDiagnostics.liveDelayMs,
+          isNull,
+          reason: '"$value" is no delay',
+        );
+      }
+    });
+  });
 }

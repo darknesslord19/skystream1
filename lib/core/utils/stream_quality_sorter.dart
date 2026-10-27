@@ -135,6 +135,11 @@ _QualityTier _detectTier(String sourceLabel) {
   return _QualityTier.unknown;
 }
 
+/// Whether [label] states a quality the sorter ranks by: a height, or a word
+/// such as HD or 4K.
+bool labelStatesQuality(String label) =>
+    _detectTier(label) != _QualityTier.unknown;
+
 /// The height [label] states outright, in the three ways it can state it.
 int? _labelledHeight(String label) {
   for (final pattern in [_dimensions, _scanlines, _bareHeight]) {
@@ -154,6 +159,29 @@ _QualityTier _tierForHeight(int height) {
   if (height >= 420) return _QualityTier.q480;
   return _QualityTier.q360;
 }
+
+/// What the sorter knows of [stream]'s quality: its own `quality` first,
+/// then its label. An adaptive stream with neither is unknown with
+/// `adaptive` set: it plays at whatever the viewer prefers, so it ranks
+/// there.
+({_QualityTier tier, bool adaptive}) _qualityOf(StreamResult stream) {
+  final quality = stream.quality;
+  if (quality != null && quality > 0) {
+    return (tier: _tierForHeight(quality), adaptive: false);
+  }
+  final tier = quality == 0 ? _QualityTier.unknown : _detectTier(stream.source);
+  return (
+    tier: tier,
+    adaptive: tier == _QualityTier.unknown && _isAdaptive(stream),
+  );
+}
+
+/// Whether [stream] adapts its quality: an HLS link - its address names a
+/// playlist, the link probe's own test, which a `MAGIC_PROXY` address (the
+/// real one rides in its query) and a `magic_m3u8:` one (served as
+/// `/<id>.m3u8`) pass too - or one that says `quality: "Auto"`.
+bool _isAdaptive(StreamResult stream) =>
+    stream.quality == 0 || stream.url.toLowerCase().contains('.m3u8');
 
 /// Returns a sort key for [tier] given [prefRank].
 /// - Preferred tier  → 0
@@ -191,6 +219,25 @@ Future<bool> isOnMeteredNetwork() async {
   }
 }
 
+/// The height [preference] stands for, or null for [QualityPreference.any],
+/// which asks for none.
+int? qualityPreferenceHeight(QualityPreference preference) =>
+    switch (preference) {
+      QualityPreference.any => null,
+      QualityPreference.q360 => 360,
+      QualityPreference.q480 => 480,
+      QualityPreference.q720 => 720,
+      QualityPreference.q1080 => 1080,
+      QualityPreference.q4k => 2160,
+    };
+
+/// The quality preference in force now: mobile data's on a metered link,
+/// Wi-Fi & Wired's otherwise - see [isOnMeteredNetwork].
+Future<QualityPreference> qualityPreferenceInForce(
+  PlayerSettings settings,
+) async =>
+    await isOnMeteredNetwork() ? settings.mobileQuality : settings.wifiQuality;
+
 /// Sorts [streams] by quality preference without changing the original list.
 ///
 /// If [preference] is [QualityPreference.any] the list is returned unchanged.
@@ -198,7 +245,7 @@ Future<bool> isOnMeteredNetwork() async {
 /// (stable sort).
 ///
 /// Sort order for a given preference P (example: 1080p):
-///   1080p → 720p → 480p → 360p → 2K → 4K → unknown/auto
+///   1080p → adaptive (HLS) → 720p → 480p → 360p → 2K → 4K → unknown
 List<StreamResult> sortStreamsByQuality(
   List<StreamResult> streams,
   QualityPreference preference,
@@ -208,19 +255,21 @@ List<StreamResult> sortStreamsByQuality(
   }
 
   final prefRank = preference.rank;
-  final indexed = streams
-      .asMap()
-      .entries
-      .map(
-        (e) =>
-            (index: e.key, stream: e.value, tier: _detectTier(e.value.source)),
-      )
-      .toList();
+  final indexed = streams.asMap().entries.map((e) {
+    final quality = _qualityOf(e.value);
+    return (
+      index: e.key,
+      stream: e.value,
+      // An adaptive stream plays at the preference, so it ranks with the
+      // links labelled with it, after them.
+      key: quality.adaptive ? 0 : _sortKey(quality.tier, prefRank),
+      behind: quality.adaptive ? 1 : 0,
+    );
+  }).toList();
 
   indexed.sort((a, b) {
-    final ka = _sortKey(a.tier, prefRank);
-    final kb = _sortKey(b.tier, prefRank);
-    if (ka != kb) return ka.compareTo(kb);
+    if (a.key != b.key) return a.key.compareTo(b.key);
+    if (a.behind != b.behind) return a.behind.compareTo(b.behind);
     return a.index.compareTo(b.index); // stable: preserve original order
   });
 
@@ -253,9 +302,10 @@ List<StreamResult> filterStreamsByQuality(
   final prefRank = preference.rank;
 
   final filtered = streams.where((s) {
-    final tier = _detectTier(s.source);
-    if (tier == _QualityTier.unknown) return true; // always keep auto/unknown
-    final r = tier.rank;
+    final quality = _qualityOf(s);
+    // An adaptive stream plays at the preference; unknown is always kept.
+    if (quality.adaptive || quality.tier == _QualityTier.unknown) return true;
+    final r = quality.tier.rank;
     if (mode == QualityFilterMode.atOrAbove) return r >= prefRank;
     if (mode == QualityFilterMode.atOrBelow) return r <= prefRank;
     return true;
@@ -273,7 +323,7 @@ List<StreamResult> filterStreamsByQuality(
 /// Returns a short human-readable quality label for [stream] suitable for
 /// display as a badge in the Sources tab (e.g. "1080p", "720p", "Auto").
 String qualityBadgeLabel(StreamResult stream) {
-  switch (_detectTier(stream.source)) {
+  switch (_qualityOf(stream).tier) {
     case _QualityTier.q4k:
       return '4K';
     case _QualityTier.q1440:

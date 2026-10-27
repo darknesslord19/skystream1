@@ -131,11 +131,15 @@ class VlcPlayerValue {
     this.isSeekable = false,
     this.isLive = false,
     this.isStalled = false,
+    this.isPictureHeld = false,
+    this.isStartGated = false,
+    this.videoSurfaceWait,
     this.interruption = VlcAudioInterruption.none,
     this.videoSize,
     this.videoOrientation,
     this.codedVideoSize,
     this.bufferingProgress,
+    this.positionFraction,
     this.error,
     this.errorDescription,
   });
@@ -219,6 +223,47 @@ class VlcPlayerValue {
   /// [VlcPlaybackState.buffering].
   final bool isStalled;
 
+  /// Whether the output still shows the last picture of the media before
+  /// this one, held by a [VlcPlayerController.setMedia] given `keepPicture`.
+  ///
+  /// libVLC 3 shows a new media's first decoded picture at once. For a media
+  /// asked to start at a position, that picture is the one at 0, decoded
+  /// before the start is sought, so a reopen at a position would show the
+  /// film's opening for as long as the seek takes: seconds on a slow link
+  /// (SkyStream's reopen spike, 2026-10-14). The native output holds instead.
+  ///
+  /// Every backend that can hold reports the same decision (FORK.md 30). A
+  /// hold starts only at a media given `keepPicture`, when there is a picture
+  /// to hold, and carries on through further ones. It ends at the current
+  /// media's first reported time after it opened - libVLC reports none until
+  /// playback runs from the start position - or at once at a plain
+  /// [VlcPlayerController.setMedia] or a stop. A media that fails, ends or is
+  /// stopped before then leaves it on: the held picture is still the right
+  /// one on screen.
+  ///
+  /// While it holds, [videoSize], [codedVideoSize] and [videoOrientation]
+  /// stay the held picture's: the new media's own would lay the held picture
+  /// out at the wrong shape. The timeline stays the media before's where the
+  /// new media's says nothing yet: a zero [duration] keeps the length before,
+  /// an [isSeekable] of false keeps the answer before, and [isLive] keeps
+  /// its value. A media still opening knows no length and says it cannot
+  /// seek, and a screen drawing its controls over the held picture would
+  /// lose its scrubber for the whole reopen. Backends that cannot hold never
+  /// set it.
+  final bool isPictureHeld;
+
+  /// Whether a play waits at the engine's start gate: Android holds a
+  /// player's start while it builds libVLC's font database, which only the
+  /// first video after an install needs (FORK.md 26). Up to a minute, with
+  /// nothing wrong with the media meanwhile, so a host watching for a stall
+  /// waits it out. False on every other backend.
+  final bool isStartGated;
+
+  /// How long the engine held playback back for its video surface, when it
+  /// had to (Android: libvlc-android starts only once the view's surface
+  /// exists). Null when it never waited; kept until a report says otherwise.
+  final Duration? videoSurfaceWait;
+
   /// Why the system last interrupted playback, if it has.
   final VlcAudioInterruption interruption;
 
@@ -271,8 +316,20 @@ class VlcPlayerValue {
     return codedVideoSize;
   }
 
-  /// Normalized buffering progress from `0.0` to `1.0`, when available.
+  /// libVLC's prebuffer, from `0.0` to `1.0`: present while libVLC fills its
+  /// buffer at the start, after a seek or after a track change, and null
+  /// otherwise. It is information, not a spinner: a stream that starves
+  /// mid-play just stops the clock, which [isStalled] reads.
   final double? bufferingProgress;
+
+  /// libVLC's own place as a fraction of [duration], from `0.0` to `1.0`
+  /// (`libvlc_media_player_get_position`), or null when the engine gave none.
+  ///
+  /// For live HLS and DASH it is the one reading relative to the window:
+  /// [duration] is the window the server still lists and this is where
+  /// playback is inside it, while [position] runs on in the stream's own
+  /// timeline. See [VlcPlayerController.seekToWindowFraction].
+  final double? positionFraction;
 
   /// Structured playback error when [state] is [VlcPlaybackState.error].
   final VlcPlayerError? error;
@@ -308,18 +365,22 @@ class VlcPlayerValue {
         other.isSeekable == isSeekable &&
         other.isLive == isLive &&
         other.isStalled == isStalled &&
+        other.isPictureHeld == isPictureHeld &&
+        other.isStartGated == isStartGated &&
+        other.videoSurfaceWait == videoSurfaceWait &&
         other.interruption == interruption &&
         other.videoSize == videoSize &&
         other.videoOrientation == videoOrientation &&
         other.codedVideoSize == codedVideoSize &&
         other.bufferingProgress == bufferingProgress &&
+        other.positionFraction == positionFraction &&
         other.error == error &&
         other.errorDescription == errorDescription;
   }
 
   @override
   // hashAll rather than hash: Object.hash takes at most twenty positional
-  // arguments and this snapshot carries twenty-one fields.
+  // arguments and this snapshot carries twenty-five fields.
   int get hashCode => Object.hashAll([
     state,
     position,
@@ -335,11 +396,15 @@ class VlcPlayerValue {
     isSeekable,
     isLive,
     isStalled,
+    isPictureHeld,
+    isStartGated,
+    videoSurfaceWait,
     interruption,
     videoSize,
     videoOrientation,
     codedVideoSize,
     bufferingProgress,
+    positionFraction,
     error,
     errorDescription,
   ]);
@@ -366,6 +431,9 @@ class VlcPlayerValue {
     bool? isSeekable,
     bool? isLive,
     bool? isStalled,
+    bool? isPictureHeld,
+    bool? isStartGated,
+    Duration? videoSurfaceWait,
     VlcAudioInterruption? interruption,
     Size? videoSize,
     VlcVideoOrientation? videoOrientation,
@@ -373,6 +441,8 @@ class VlcPlayerValue {
     Size? codedVideoSize,
     double? bufferingProgress,
     bool clearBufferingProgress = false,
+    double? positionFraction,
+    bool clearPositionFraction = false,
     VlcPlayerError? error,
     String? errorDescription,
     bool clearError = false,
@@ -410,6 +480,9 @@ class VlcPlayerValue {
       isSeekable: isSeekable ?? this.isSeekable,
       isLive: isLive ?? this.isLive,
       isStalled: isStalled ?? this.isStalled,
+      isPictureHeld: isPictureHeld ?? this.isPictureHeld,
+      isStartGated: isStartGated ?? this.isStartGated,
+      videoSurfaceWait: videoSurfaceWait ?? this.videoSurfaceWait,
       interruption: interruption ?? this.interruption,
       videoSize: clearVideoSize ? null : videoSize ?? this.videoSize,
       // Cleared with videoSize: all three describe the same picture, and last
@@ -424,6 +497,9 @@ class VlcPlayerValue {
       bufferingProgress: clearBufferingProgress
           ? null
           : bufferingProgress ?? this.bufferingProgress,
+      positionFraction: clearPositionFraction
+          ? null
+          : positionFraction ?? this.positionFraction,
       error: nextError,
       errorDescription: nextErrorDescription,
     );
@@ -462,9 +538,22 @@ class VlcPlayerValue {
         ? _sizeFromMap(event['codedSize'])
         : null;
     final videoOrientation = _orientationValue(event['videoOrientation']);
+    // A held picture keeps the size it is shown at; see [isPictureHeld].
+    final pictureHeld = _boolValue(event['pictureHeld']) ?? false;
+    // And its media keeps the timeline the controls are drawn from until the
+    // hold ends: a media still opening knows no length, says it cannot seek,
+    // and is called live or not from those two (FORK.md 33).
+    final duration = _durationFromMilliseconds(event['duration']);
+    final isSeekable = _boolValue(event['isSeekable']);
     final hasBufferingProgress = event.containsKey('bufferingProgress');
     final bufferingProgress = hasBufferingProgress
         ? _normalizedProgress(event['bufferingProgress'])
+        : null;
+    // An absent key keeps the previous reading; libVLC's -1 (no media) or
+    // anything else outside 0..1 clears it.
+    final hasPositionFraction = event.containsKey('positionFraction');
+    final positionFraction = hasPositionFraction
+        ? _fractionValue(event['positionFraction'])
         : null;
     final error = _errorFromEvent(event);
     // An absent track key keeps the previous value; a present key that is not
@@ -480,7 +569,7 @@ class VlcPlayerValue {
     return previous.copyWith(
       state: state,
       position: _durationFromMilliseconds(event['position']),
-      duration: _durationFromMilliseconds(event['duration']),
+      duration: pictureHeld && duration == Duration.zero ? null : duration,
       volume: _intValue(event['volume']),
       playbackSpeed: _doubleValue(event['playbackSpeed']),
       audioDelay: _durationFromMicroseconds(event['audioDelay']),
@@ -491,20 +580,30 @@ class VlcPlayerValue {
       clearActiveSubtitleTrack: hasSubtitleTrack && subtitleTrack == null,
       trackRevision: _intValue(event['trackRevision']),
       isReady: _boolValue(event['isReady']) ?? _isReadyState(state),
-      isSeekable: _boolValue(event['isSeekable']),
-      isLive: _boolValue(event['isLive']),
+      isSeekable: pictureHeld && isSeekable == false ? null : isSeekable,
+      isLive: pictureHeld ? null : _boolValue(event['isLive']),
       interruption: _interruptionFromString(
         _stringValue(event['interruption']),
       ),
-      videoSize: videoSize,
-      videoOrientation: videoOrientation,
-      codedVideoSize: codedVideoSize,
+      videoSize: pictureHeld ? null : videoSize,
+      videoOrientation: pictureHeld ? null : videoOrientation,
+      codedVideoSize: pictureHeld ? null : codedVideoSize,
       clearVideoSize:
-          (hasVideoSize && videoSize == null) || _clearsVideoSize(state),
+          !pictureHeld &&
+          ((hasVideoSize && videoSize == null) || _clearsVideoSize(state)),
+      isPictureHeld: pictureHeld,
+      // Only Android has a start gate, and every snapshot it sends says.
+      isStartGated: _boolValue(event['startGated']) ?? false,
+      videoSurfaceWait: _durationFromMilliseconds(event['videoSurfaceWaitMs']),
       bufferingProgress: bufferingProgress,
+      positionFraction: positionFraction,
+      clearPositionFraction: hasPositionFraction && positionFraction == null,
+      // The prebuffer is reported while a media opens as well as while it
+      // rebuffers: libVLC fills its buffer before the first picture too.
       clearBufferingProgress:
           (hasBufferingProgress && bufferingProgress == null) ||
-          state != VlcPlaybackState.buffering,
+          (state != VlcPlaybackState.buffering &&
+              state != VlcPlaybackState.opening),
       error: error,
       errorDescription: error?.message,
       clearError: error == null,
@@ -554,6 +653,13 @@ class VlcPlayerValue {
     return Size(width, height);
   }
 
+  static double? _fractionValue(Object? value) {
+    if (value is! num || !value.isFinite || value < 0 || value > 1) {
+      return null;
+    }
+    return value.toDouble();
+  }
+
   static double? _normalizedProgress(Object? value) {
     if (value is! num || !value.isFinite) {
       return null;
@@ -589,11 +695,13 @@ class VlcPlayerValue {
     };
   }
 
+  /// The states whose picture is gone, or about to be replaced; `opening`
+  /// only without a hold (see [fromEvent]). Not an error: the output still
+  /// shows a picture after a failure - a held one, or the failed media's
+  /// last - and a screen offers its retry over it (FORK.md 33).
   static bool _clearsVideoSize(VlcPlaybackState state) {
     return switch (state) {
-      VlcPlaybackState.idle ||
-      VlcPlaybackState.opening ||
-      VlcPlaybackState.error => true,
+      VlcPlaybackState.idle || VlcPlaybackState.opening => true,
       _ => false,
     };
   }

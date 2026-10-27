@@ -271,7 +271,17 @@ class TraktService implements TrackingService {
         talker.debug('TraktService: Token refreshed successfully');
         return true;
       }
-      await _clearSession('refresh returned ${response.statusCode}');
+      // An answer with no tokens is a refusal only when it says so. A bot
+      // check the app couldn't clear comes back as an answer too (the
+      // clearance interceptor), and spends nothing.
+      final status = response.statusCode;
+      if (status == 400 || status == 401) {
+        await _clearSession('refresh refused with $status');
+      } else {
+        talker.error(
+          'TraktService: refresh answered $status without a token, will retry',
+        );
+      }
       return false;
     } on DioException catch (e) {
       final status = e.response?.statusCode;

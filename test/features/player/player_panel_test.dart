@@ -2229,6 +2229,159 @@ void main() {
       expect(_selectedRows(tester), <String>['Commentary']);
     });
 
+    testWidgets('a revision that changes nothing keeps the rows', (
+      tester,
+    ) async {
+      // On HLS with WebVTT the revision moves at every segment: the rows went
+      // back to a spinner and the remote's cursor to the active row each time.
+      final engine = FakeVlcEngine()
+        ..audio = <Map<String, Object?>>[
+          _track(1, 'Stereo'),
+          _track(2, 'Commentary'),
+        ]
+        ..activeAudioId = 1;
+      await pumpPanel(tester, tab: PlayerPanelTab.audio, engine: engine);
+      final list = tester.element(find.byType(ListView).first);
+
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(tester.element(find.byType(ListView).first), same(list));
+    });
+
+    testWidgets('a revision move leaves focus on the row the viewer is on', (
+      tester,
+    ) async {
+      final engine = FakeVlcEngine()
+        ..audio = <Map<String, Object?>>[
+          _track(1, 'Stereo'),
+          _track(2, 'Commentary'),
+        ]
+        ..activeAudioId = 1;
+      await pumpPanel(tester, tab: PlayerPanelTab.audio, engine: engine);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      final focused = FocusManager.instance.primaryFocus;
+      expect(_focusedRow(), 'Commentary');
+
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus, same(focused));
+    });
+
+    testWidgets('a revision with a new list keeps the cursor where it was', (
+      tester,
+    ) async {
+      // HLS with WebVTT makes its text track again at every segment, under a
+      // new id: the list really changes, every 2-10 s, and the remote stays
+      // on the row the viewer is on.
+      final engine = FakeVlcEngine()
+        ..audio = <Map<String, Object?>>[
+          _track(1, 'Stereo'),
+          _track(2, 'Commentary'),
+        ]
+        ..activeAudioId = 1;
+      await pumpPanel(tester, tab: PlayerPanelTab.audio, engine: engine);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_focusedRow(), 'Commentary');
+
+      engine
+        ..audio = <Map<String, Object?>>[
+          _track(3, 'Stereo'),
+          _track(2, 'Commentary'),
+        ]
+        ..activeAudioId = 3;
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(_focusedRow(), 'Commentary');
+      expect(_selectedRows(tester), <String>['Stereo']);
+    });
+
+    testWidgets('tracks that arrive leave the cursor on Retry', (tester) async {
+      // Opened before the stream announced its audio, the list was Retry and
+      // the delay. The tracks came in above it, and Select on the row under
+      // the remote switched the audio instead of trying again.
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final engine = FakeVlcEngine();
+      await pumpPanel(tester, tab: PlayerPanelTab.audio, engine: engine);
+      expect(_focusedRow(), l10n.retry);
+
+      engine
+        ..audio = <Map<String, Object?>>[
+          _track(1, 'Stereo'),
+          _track(2, 'Commentary'),
+        ]
+        ..activeAudioId = 1;
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      await tester.pump();
+      expect(_focusedRow(), l10n.retry);
+    });
+
+    testWidgets('a subtitle track that arrives leaves the cursor on the row '
+        'the viewer is on', (tester) async {
+      // HLS with WebVTT makes its subtitle track again at every segment and
+      // drops the old one after: for a while the list holds one track more,
+      // and every row below the tracks moved down under the remote.
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      final engine = FakeVlcEngine()
+        ..subtitle = <Map<String, Object?>>[_track(5, 'English')];
+      await pumpPanel(tester, tab: PlayerPanelTab.subtitles, engine: engine);
+      for (
+        var i = 0;
+        i < 8 && _focusedRow() != l10n.searchSubtitlesOnline;
+        i++
+      ) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expect(_focusedRow(), l10n.searchSubtitlesOnline);
+
+      engine.subtitle = <Map<String, Object?>>[
+        _track(5, 'English'),
+        _track(7, 'English'),
+      ];
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      await tester.pump();
+      expect(_focusedRow(), l10n.searchSubtitlesOnline);
+
+      // The old one goes: the second English row was the new track.
+      engine.subtitle = <Map<String, Object?>>[_track(7, 'English')];
+      await engine.bumpTracks(_paused);
+      await tester.pump();
+      await tester.pump();
+      expect(_focusedRow(), l10n.searchSubtitlesOnline);
+    });
+
+    testWidgets("a track list read the panel outlived isn't an uncaught error", (
+      tester,
+    ) async {
+      // Leaving the player takes the panel away and disposes the controller
+      // with a read still out, before a frame let the list hear of it: the
+      // read fails, and nothing was left to catch it.
+      final engine = FakeVlcEngine()
+        ..audio = <Map<String, Object?>>[_track(1, 'Stereo')]
+        ..activeAudioId = 1;
+      final panel = await pumpPanel(
+        tester,
+        tab: PlayerPanelTab.audio,
+        engine: engine,
+      );
+      final held = engine.holdNextReply('getAudioTracks');
+      await engine.bumpTracks(_paused);
+      await tester.pumpWidget(const SizedBox());
+      panel.controller.dispose();
+      held.complete();
+      await tester.pump();
+      // flutter_test fails a test on an uncaught async error: reaching here is
+      // the assertion.
+    });
+
     testWidgets('the audio delay stepper: Right +100 ms, held +500 ms, Select '
         'resets, and the read-out follows the engine', (tester) async {
       final l10n = await AppLocalizations.delegate.load(const Locale('en'));

@@ -1388,7 +1388,7 @@ class AppLocalizationsMl extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'ഗുണനിലവാരം ഉറപ്പില്ല. ഉറവിടങ്ങൾ ഈ മുൻഗണന അനുസരിച്ച് ക്രമീകരിക്കുന്നു, ഒന്നിലധികം ഗുണനിലവാരങ്ങളുള്ള സ്ട്രീം ഈ ഗുണനിലവാരത്തിലോ അതിനു താഴെയുള്ള ഏറ്റവും അടുത്തതിലോ പ്ലേ ചെയ്യും. പ്ലേബാക്ക് ദാതാവ് യഥാർത്ഥത്തിൽ എന്ത് നൽകുന്നു എന്നതിനെ ആശ്രയിച്ചിരിക്കുന്നു.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1516,6 +1516,16 @@ class AppLocalizationsMl extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1560,6 +1570,9 @@ class AppLocalizationsMl extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2393,4 +2406,36 @@ class AppLocalizationsMl extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'പശ്ചാത്തല';
+
+  @override
+  String get playerQuality => 'ഗുണനിലവാരം';
+
+  @override
+  String get playerQualityAuto => 'ഓട്ടോ';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'ഓട്ടോ · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'ഓട്ടോ (ശുപാർശ ചെയ്യുന്നത്)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'ഓരോ വീഡിയോയ്ക്കും അതിന്റെ ബിറ്റ്റേറ്റും ഈ ഉപകരണത്തിന്റെ മെമ്മറിയും അനുസരിച്ച് വലുപ്പം നിശ്ചയിക്കുന്നു.';
+
+  @override
+  String get devQoeLog => 'QoE ലോഗ്';
+
+  @override
+  String get devQoeLogSubtitle => 'പ്ലേബാക്ക് സമയങ്ങൾ ആപ്പ് ലോഗിൽ എഴുതുന്നു';
+
+  @override
+  String get playerGoLive => 'തത്സമയത്തിലേക്ക് പോകുക';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'തത്സമയത്തേക്കാൾ $time പിന്നിൽ';
+  }
 }

@@ -1381,7 +1381,7 @@ class AppLocalizationsNl extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Kwaliteit is niet gegarandeerd. Bronnen worden gesorteerd op voorkeur, maar weergave hangt af van het aanbod van de provider.';
+      'Kwaliteit is niet gegarandeerd. Bronnen worden gesorteerd op deze voorkeur, en een stream met meerdere kwaliteiten speelt in deze kwaliteit of de dichtstbijzijnde lagere. Weergave hangt af van wat de provider werkelijk aanbiedt.';
 
   @override
   String get keepSourcesOriginalOrder => 'Bronnen in originele volgorde houden';
@@ -1509,6 +1509,16 @@ class AppLocalizationsNl extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1553,6 +1563,9 @@ class AppLocalizationsNl extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2385,4 +2398,36 @@ class AppLocalizationsNl extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Figurant';
+
+  @override
+  String get playerQuality => 'Kwaliteit';
+
+  @override
+  String get playerQualityAuto => 'Automatisch';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automatisch · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automatisch (aanbevolen)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Per video afgestemd op de bitrate en het geheugen van dit apparaat.';
+
+  @override
+  String get devQoeLog => 'QoE-logboek';
+
+  @override
+  String get devQoeLogSubtitle => 'Schrijft afspeeltijden naar het app-logboek';
+
+  @override
+  String get playerGoLive => 'Naar live';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time achter live';
+  }
 }

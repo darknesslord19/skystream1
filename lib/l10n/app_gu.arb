@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API કી (વૈકલ્પિક)",
   "enterKeyToOverrideDefault": "ડિફૉલ્ટને ઓવરરાઈડ કરવા માટે કી દાખલ કરો",
   "getApiKeyFromProfile": "તમારી API કી SubSource પ્રોફાઇલમાંથી મેળવો",
-  "qualityNotGuaranteed": "ગુણવત્તાની ગેરંટી નથી. સ્રોતો પસંદગી મુજબ ગોઠવવામાં આવે છે, પરંતુ પ્લેબેક પ્રદાતાની ઉપલબ્ધતા પર આધાર રાખે છે.",
+  "qualityNotGuaranteed": "ગુણવત્તાની ગેરંટી નથી. સ્રોતો આ પસંદગી મુજબ ગોઠવાય છે, અને જે સ્ટ્રીમમાં ઘણી ગુણવત્તાઓ હોય તે આ ગુણવત્તામાં અથવા તેનાથી નીચેની સૌથી નજીકની ગુણવત્તામાં ચાલે છે. પ્લેબેક પ્રદાતા ખરેખર શું આપે છે તેના પર આધાર રાખે છે.",
   "keepSourcesOriginalOrder": "સ્રોતોને મૂળ ક્રમમાં રાખો",
   "openLink": "લિંક ખોલો",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "કલાકારો: {names}",
   "actorRoleMain": "મુખ્ય",
   "actorRoleSupporting": "સહાયક",
-  "actorRoleBackground": "ગૌણ"
+  "actorRoleBackground": "ગૌણ",
+  "playerQuality": "ગુણવત્તા",
+  "playerQualityAuto": "ઑટો",
+  "playerQualityAutoPlaying": "ઑટો · {height}",
+  "networkBufferAuto": "ઑટો (ભલામણ કરેલ)",
+  "networkBufferAutoHint": "દરેક વિડિયો માટે તેના બિટરેટ અને આ ડિવાઇસની મેમરી મુજબ કદ નક્કી થાય છે.",
+  "devQoeLog": "QoE લૉગ",
+  "devQoeLogSubtitle": "પ્લેબૅકના સમય ઍપના લૉગમાં લખે છે",
+  "playerGoLive": "લાઇવ પર જાઓ",
+  "playerBehindLive": "લાઇવથી {time} પાછળ"
 }

@@ -93,6 +93,7 @@ class PlayerTracksTab extends StatelessWidget {
     required this.trackInfo,
     required this.onTracksChanged,
     required this.onOpenPage,
+    this.onTrackAdded,
     this.sideCars,
     this.target,
     this.searchFocusNode,
@@ -133,6 +134,12 @@ class PlayerTracksTab extends StatelessWidget {
   /// engine that never said - and a refused set, which means the list on
   /// screen is out of date (see `_setTrack`).
   final VoidCallback onTracksChanged;
+
+  /// Tells the panel a track the viewer brought is on its way to the engine.
+  /// The list that first shows it re-anchors on what is playing then, as a
+  /// reload does, so the remote lands on the file just picked; every other
+  /// revision move keeps the rows where the viewer had them.
+  final VoidCallback? onTrackAdded;
 
   /// Opens a second step in the panel's place: the online search. See
   /// [PanelPage].
@@ -244,71 +251,105 @@ class PlayerTracksTab extends StatelessWidget {
         ? leading + listed.indexWhere((track) => track.id == engineActive)
         : (_isAudio ? (listed.isEmpty ? retryIndex : 0) : 0);
 
+    // Each row keeps its element, and the focus on it, while rows above it
+    // come and go: HLS with WebVTT makes its subtitle track again at every
+    // segment, and for a while the list holds one track more. A track is
+    // known by its label, the n-th row of that label, as the viewer reads the
+    // list, so one made again under a new id keeps its row.
+    Widget keyed(Object id, Widget row) =>
+        KeyedSubtree(key: ValueKey<Object>(id), child: row);
+    final labels = [
+      for (final (index, track) in listed.indexed)
+        trackLabel(track, _infoFor(index), l10n),
+    ];
+    final seen = <String, int>{};
+    final trackIds = <Object>[
+      for (final label in labels)
+        ('track', label, seen[label] = (seen[label] ?? -1) + 1),
+    ];
+
     final children = <Widget>[
       if (!_isAudio)
-        PanelRow(
-          label: l10n.off,
-          icon: Icons.subtitles_off_outlined,
-          selected: engineActive == null && activeFile == null,
-          autofocus: autofocus && anchor == 0,
-          onTap: () => unawaited(
-            _setTrack(context, () async {
-              await sideCars?.select(null);
-              await controller.disableSubtitle();
-            }, reseat: false),
-          ),
-        ),
-      if (empty)
-        PanelEmpty(
-          text: _isAudio ? l10n.noAudioTracksReported : l10n.noSubtitlesFound,
-        )
-      else ...[
-        for (final (index, track) in listed.indexed)
+        keyed(
+          'off',
           PanelRow(
-            label: trackLabel(track, _infoFor(index), l10n),
-            detail: trackDetail(_infoFor(index)),
-            selected: engineActive == track.id,
-            autofocus: autofocus && anchor == leading + index,
+            label: l10n.off,
+            icon: Icons.subtitles_off_outlined,
+            selected: engineActive == null && activeFile == null,
+            autofocus: autofocus && anchor == 0,
             onTap: () => unawaited(
               _setTrack(context, () async {
-                if (_isAudio) {
-                  onAudioPicked?.call(
-                    withTrackLanguage(track, _infoFor(index)),
-                  );
-                  await controller.setAudioTrack(track.id);
-                  return;
-                }
                 await sideCars?.select(null);
-                await controller.setSubtitleTrack(track.id);
+                await controller.disableSubtitle();
               }),
             ),
           ),
+        ),
+      if (empty)
+        keyed(
+          'none',
+          PanelEmpty(
+            text: _isAudio ? l10n.noAudioTracksReported : l10n.noSubtitlesFound,
+          ),
+        )
+      else ...[
+        for (final (index, track) in listed.indexed)
+          keyed(
+            trackIds[index],
+            PanelRow(
+              label: labels[index],
+              detail: trackDetail(_infoFor(index)),
+              selected: engineActive == track.id,
+              autofocus: autofocus && anchor == leading + index,
+              onTap: () => unawaited(
+                _setTrack(context, () async {
+                  if (_isAudio) {
+                    onAudioPicked?.call(
+                      withTrackLanguage(track, _infoFor(index)),
+                    );
+                    await controller.setAudioTrack(track.id);
+                    return;
+                  }
+                  await sideCars?.select(null);
+                  await controller.setSubtitleTrack(track.id);
+                }),
+              ),
+            ),
+          ),
         for (final (index, file) in files.indexed)
-          PanelRow(
-            label: sideCarLabel(file, index, l10n),
-            detail: switch (sideCars!.statusOf(file)) {
-              SideCarStatus.loading => l10n.loading,
-              SideCarStatus.failed => l10n.failed,
-              _ => null,
-            },
-            selected: activeFile == file,
-            autofocus: autofocus && anchor == filesStart + index,
-            onTap: () => unawaited(_showFile(file)),
+          keyed(
+            ('file', file),
+            PanelRow(
+              label: sideCarLabel(file, index, l10n),
+              detail: switch (sideCars!.statusOf(file)) {
+                SideCarStatus.loading => l10n.loading,
+                SideCarStatus.failed => l10n.failed,
+                _ => null,
+              },
+              selected: activeFile == file,
+              autofocus: autofocus && anchor == filesStart + index,
+              onTap: () => unawaited(_showFile(file)),
+            ),
           ),
       ],
       // Tracks can arrive after the panel opened. The panel re-reads the list
       // when the engine's revision moves; this is the manual fallback for an
       // engine that did not say, and the only row an empty Audio tab has.
-      PanelRow(
-        label: l10n.retry,
-        icon: Icons.refresh_rounded,
-        autofocus: autofocus && anchor == retryIndex,
-        onTap: onTracksChanged,
+      keyed(
+        'retry',
+        PanelRow(
+          label: l10n.retry,
+          icon: Icons.refresh_rounded,
+          autofocus: autofocus && anchor == retryIndex,
+          onTap: onTracksChanged,
+        ),
       ),
       if (_isAudio)
-        ..._audioExtras(l10n)
+        for (final (n, row) in _audioExtras(l10n).indexed)
+          keyed(('extra', n), row)
       else
-        ..._subtitleExtras(context, l10n),
+        for (final (n, row) in _subtitleExtras(context, l10n).indexed)
+          keyed(('extra', n), row),
     ];
 
     // The widget objects are built eagerly; handing them to the builder keeps
@@ -323,6 +364,10 @@ class PlayerTracksTab extends StatelessWidget {
       autofocus: autofocus,
       itemCount: children.length,
       itemBuilder: (context, index) => children[index],
+      findChildIndexCallback: (key) {
+        final index = children.indexWhere((row) => row.key == key);
+        return index < 0 ? null : index;
+      },
     );
   }
 
@@ -339,14 +384,16 @@ class PlayerTracksTab extends StatelessWidget {
   /// A refusal also means the list has moved on - a stream renegotiated, a
   /// language dropped - since the id came from a list read once and held
   /// since. So the list is read again.
+  ///
+  /// A switch only selects: nothing seeks. libVLC plays the new track one
+  /// caching interval later, a second on demand; the seek that used to
+  /// follow cost a rebuffer and could land on top of a seek of the viewer's.
   Future<void> _setTrack(
     BuildContext context,
-    Future<void> Function() call, {
-    bool reseat = true,
-  }) async {
+    Future<void> Function() call,
+  ) async {
     try {
       await call();
-      if (reseat) await reseatAfterTrackSwitch(controller);
     } on VlcPlayerException catch (_) {
       // The panel can be closed, or the list already re-read under us, while
       // the call is in flight; a reload then belongs to nobody.
@@ -375,6 +422,7 @@ class PlayerTracksTab extends StatelessWidget {
     final files = sideCars;
     if (files == null) {
       await controller.addSubtitle(file);
+      onTrackAdded?.call();
       return true;
     }
     return _showFile(
@@ -549,41 +597,6 @@ class PlayerTracksTab extends StatelessWidget {
       // reason to refuse to open the search.
       return null;
     }
-  }
-}
-
-/// Re-issues [controller]'s current position after a track switch, so the new
-/// track starts here, now. Used by every switch: a row picked here, and the
-/// player screen's own - the audio language setting's, and a reopen's restore.
-///
-/// A stream selected mid-playback begins at the demuxer's read point, which
-/// sits a whole caching interval ahead of the picture, so the new track is
-/// silent until the clock catches up to it. Seeking flushes every stream and
-/// refills them together, which is what makes the switch land immediately -
-/// the same thing a viewer discovers by scrubbing a little after switching.
-///
-/// The cost is honest and deliberate: a short rebuffer in place of a longer
-/// wrong-sounding one. It is also cheap now that a read-ahead buffer sits
-/// under the demuxer, because a seek back to where we already are is served
-/// from memory rather than from the network.
-///
-/// Refused where a seek means nothing - a live feed has nowhere to go, and
-/// an unseekable source would simply fail the call - and before the media has
-/// a position to go back to.
-///
-/// Here is the playback clock's position, not the engine's last word: that
-/// is up to a throttle interval old, and VLCKit's does not move at all on a
-/// seek made while paused, so re-seating there would undo the seek.
-Future<void> reseatAfterTrackSwitch(VlcPlayerController controller) async {
-  final value = controller.value;
-  if (value.isLive || !value.isSeekable) return;
-  final position = controller.playbackClock.position;
-  if (position <= Duration.zero) return;
-  try {
-    await controller.seekTo(position);
-  } on Object {
-    // A refused seek costs the immediacy, not the track change, which has
-    // already happened.
   }
 }
 

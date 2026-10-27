@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "A minőség nem garantált. A források e beállítás szerint rendeződnek, a több minőséget kínáló stream pedig ebben vagy a legközelebbi alacsonyabban szól. A lejátszás attól függ, mit kínál valójában a szolgáltató.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Szereplők: {names}",
   "actorRoleMain": "Főszerep",
   "actorRoleSupporting": "Mellékszerep",
-  "actorRoleBackground": "Statiszta"
+  "actorRoleBackground": "Statiszta",
+  "playerQuality": "Minőség",
+  "playerQualityAuto": "Automatikus",
+  "playerQualityAutoPlaying": "Automatikus · {height}",
+  "networkBufferAuto": "Automatikus (ajánlott)",
+  "networkBufferAutoHint": "Minden videóhoz a bitrátája és a készülék memóriája alapján méretezve.",
+  "devQoeLog": "QoE-napló",
+  "devQoeLogSubtitle": "A lejátszási időket az alkalmazás naplójába írja",
+  "playerGoLive": "Ugrás az élő adáshoz",
+  "playerBehindLive": "{time} lemaradás az élő adáshoz képest"
 }

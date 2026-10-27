@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <utility>
@@ -98,6 +100,17 @@ uint64_t FoldTrackList(uint64_t hash,
 
 std::atomic<uint64_t> g_snapshot_counter{0};
 
+// See VlcPlayerCore::KeepPluginBankLoaded. Never released.
+libvlc_instance_t* g_kept_instance = nullptr;
+std::once_flag g_kept_instance_once;
+
+// libVLC 3.0.24's warning for a seek its demuxer refused, after es_out has
+// already flushed (input.c, Control: msg_Warn "INPUT_CONTROL_SET_TIME
+// %"PRId64" failed or not possible", in microseconds). Matched on the format
+// string so no other message is ever formatted.
+constexpr char kRefusedSeekFormat[] = "INPUT_CONTROL_SET_TIME";
+constexpr char kRefusedSeekTail[] = "failed or not possible";
+
 std::string EnvironmentValue(const char* name) {
 #ifdef _WIN32
   char* value = nullptr;
@@ -165,20 +178,38 @@ bool ReadFileIfReady(const std::string& path, std::vector<uint8_t>* data) {
 
 }  // namespace
 
+// static
+void VlcPlayerCore::KeepPluginBankLoaded(bool rebuild_plugin_cache) {
+  std::call_once(g_kept_instance_once, [rebuild_plugin_cache] {
+    std::vector<const char*> argv;
+    if (rebuild_plugin_cache) {
+      argv.push_back("--reset-plugins-cache");
+    }
+    g_kept_instance =
+        libvlc_new(static_cast<int>(argv.size()), argv.data());
+  });
+}
+
 VlcPlayerCore::VlcPlayerCore(std::vector<std::string> options,
-                             FrameAvailableCallback on_frame_available)
-    : on_frame_available_(std::move(on_frame_available)) {
+                             FrameAvailableCallback on_frame_available,
+                             ChangedCallback on_changed)
+    : on_frame_available_(std::move(on_frame_available)),
+      on_changed_(std::move(on_changed)) {
   std::vector<const char*> argv;
   argv.reserve(options.size());
   for (const auto& option : options) {
     argv.push_back(option.c_str());
   }
 
+  // Ahead of this core's own instance, so the plugin bank is loaded once
+  // per process. On Windows the plugin has already made it, with its own
+  // answer about the plugin cache, and this does nothing.
+  KeepPluginBankLoaded(false);
   try {
     instance_ =
         std::make_unique<VLC::Instance>(static_cast<int>(argv.size()),
                                         argv.data());
-    player_ = std::make_unique<VLC::MediaPlayer>(*instance_);
+    player_ = std::make_shared<VLC::MediaPlayer>(*instance_);
   } catch (const std::exception& error) {
     init_error_ = error.what();
     return;
@@ -197,15 +228,15 @@ VlcPlayerCore::VlcPlayerCore(std::vector<std::string> options,
       // coded size.
       //
       // Called on libVLC's video output thread, from inside the format
-      // callback. player_ is safe to touch there: Dispose detaches the video
-      // output first, and Detach takes the attachment lock that the format
-      // callback is holding, so no callback can still be running by the time
-      // player_ is reset.
+      // callback, so it reads the player through CurrentPlayer(): the
+      // platform thread may be swapping it. Only the current player's video
+      // output is attached to the sink, so the answer is that player's.
       [this](uint32_t* width, uint32_t* height) {
         unsigned visible_width = 0;
         unsigned visible_height = 0;
-        if (player_ == nullptr ||
-            !player_->size(0, &visible_width, &visible_height)) {
+        const auto player = CurrentPlayer();
+        if (player == nullptr ||
+            !player->size(0, &visible_width, &visible_height)) {
           return false;
         }
         *width = visible_width;
@@ -214,6 +245,8 @@ VlcPlayerCore::VlcPlayerCore(std::vector<std::string> options,
       });
   video_output_ =
       std::make_unique<VlcVideoOutput>(player_->get(), frame_sink_.get());
+  Subscribe(*player_, 0);
+  libvlc_log_set(instance_->get(), &VlcPlayerCore::OnLog, this);
 }
 
 VlcPlayerCore::~VlcPlayerCore() {
@@ -228,12 +261,212 @@ const std::string& VlcPlayerCore::error() const {
   return init_error_;
 }
 
+std::shared_ptr<VLC::MediaPlayer> VlcPlayerCore::CurrentPlayer() const {
+  std::lock_guard<std::mutex> lock(player_mutex_);
+  return player_;
+}
+
+void VlcPlayerCore::ReplacePlayer() {
+  auto next = std::make_shared<VLC::MediaPlayer>(*instance_);
+  {
+    // What libVLC keeps per player rather than per media.
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    next->setVolume(volume_);
+    next->setRate(static_cast<float>(rate_));
+    next->setAudioDelay(audio_delay_);
+    next->setSpuDelay(subtitle_delay_);
+  }
+  // The old player stops drawing into the sink and talking to this core
+  // before anything else happens to it. Its events are dropped from here on
+  // by generation; Unsubscribe then waits out a callback already past that
+  // check, which takes state_mutex_, so it is never called with that lock
+  // held.
+  video_output_->Detach();
+  const uint64_t generation = ++generation_;
+  std::shared_ptr<VLC::MediaPlayer> old;
+  {
+    std::lock_guard<std::mutex> lock(player_mutex_);
+    old = player_;
+  }
+  if (old != nullptr) {
+    Unsubscribe(*old);
+  }
+  {
+    // After the old player's last callback: a prebuffer it reported is not
+    // the new one's.
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    buffering_percent_ = -1.0f;
+  }
+  {
+    std::lock_guard<std::mutex> lock(player_mutex_);
+    player_ = next;
+  }
+  video_output_ =
+      std::make_unique<VlcVideoOutput>(next->get(), frame_sink_.get());
+  Subscribe(*next, generation);
+  if (has_subtitle_look_) {
+    bool applied = false;
+    SetSubtitleLook(subtitle_look_, &applied);
+  }
+  ReleaseLater(std::move(old));
+}
+
+// static
+void VlcPlayerCore::ReleaseLater(std::shared_ptr<VLC::MediaPlayer> player) {
+  if (player == nullptr) {
+    return;
+  }
+  // libVLC 3 stops a stream synchronously: stop() joins the input thread,
+  // which an adaptive stream's stalled segment download keeps alive for as
+  // long as the stall lasts (spec 3). A thread of its own waits instead of
+  // the platform's.
+  std::thread([player = std::move(player)]() mutable {
+    // A reader that copied the player before the swap finishes with it first:
+    // a getter that ran into this stop would wait as long as the stop.
+    for (int i = 0; i < 400 && player.use_count() > 1; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    player->stop();
+    player.reset();
+  }).detach();
+}
+
+void VlcPlayerCore::Subscribe(VLC::MediaPlayer& player, uint64_t generation) {
+  auto& events = player.eventManager();
+  events_.push_back(
+      events.onOpening([this, generation] { OnOpening(generation); }));
+  events_.push_back(events.onBuffering(
+      [this, generation](float percent) { OnBuffering(generation, percent); }));
+  events_.push_back(
+      events.onPlaying([this, generation] { OnChanged(generation); }));
+  events_.push_back(
+      events.onPaused([this, generation] { OnChanged(generation); }));
+  events_.push_back(
+      events.onStopped([this, generation] { OnMediaGone(generation); }));
+  events_.push_back(
+      events.onEndReached([this, generation] { OnMediaGone(generation); }));
+  events_.push_back(events.onEncounteredError(
+      [this, generation] { OnMediaGone(generation); }));
+  events_.push_back(events.onTimeChanged(
+      [this, generation](libvlc_time_t) { OnTimeChanged(generation); }));
+  events_.push_back(events.onLengthChanged(
+      [this, generation](libvlc_time_t) { OnChanged(generation); }));
+  events_.push_back(events.onSeekableChanged(
+      [this, generation](bool) { OnChanged(generation); }));
+  events_.push_back(
+      events.onVout([this, generation](int) { OnChanged(generation); }));
+  events_.push_back(events.onESAdded(
+      [this, generation](VLC::MediaTrack::Type, int) {
+        OnChanged(generation);
+      }));
+  events_.push_back(events.onESDeleted(
+      [this, generation](VLC::MediaTrack::Type, int) {
+        OnChanged(generation);
+      }));
+  events_.push_back(events.onESSelected(
+      [this, generation](VLC::MediaTrack::Type, int) {
+        OnChanged(generation);
+      }));
+}
+
+void VlcPlayerCore::Unsubscribe(VLC::MediaPlayer& player) {
+  auto& events = player.eventManager();
+  for (auto event : events_) {
+    events.unregister(event);
+  }
+  events_.clear();
+}
+
+void VlcPlayerCore::OnChanged(uint64_t generation) {
+  if (generation != generation_.load()) {
+    return;
+  }
+  if (on_changed_) {
+    on_changed_();
+  }
+}
+
+void VlcPlayerCore::OnOpening(uint64_t generation) {
+  if (generation != generation_.load()) {
+    return;
+  }
+  picture_hold_.OnOpening();
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    buffering_percent_ = -1.0f;
+  }
+  OnChanged(generation);
+}
+
+void VlcPlayerCore::OnBuffering(uint64_t generation, float percent) {
+  if (generation != generation_.load()) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    buffering_percent_ = percent;
+  }
+  OnChanged(generation);
+}
+
+void VlcPlayerCore::OnTimeChanged(uint64_t generation) {
+  if (generation != generation_.load()) {
+    return;
+  }
+  if (picture_hold_.OnTimeChanged() == VlcPictureHold::Change::kRelease) {
+    frame_sink_->ReleaseHold();
+  }
+  OnChanged(generation);
+}
+
+void VlcPlayerCore::OnMediaGone(uint64_t generation) {
+  if (generation != generation_.load()) {
+    return;
+  }
+  if (picture_hold_.OnMediaGone() == VlcPictureHold::Change::kRelease) {
+    frame_sink_->ReleaseHold();
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    buffering_percent_ = -1.0f;
+  }
+  OnChanged(generation);
+}
+
+// static
+void VlcPlayerCore::OnLog(void* data, int level, const libvlc_log_t*,
+                          const char* format, va_list arguments) {
+  static_cast<VlcPlayerCore*>(data)->OnLogMessage(level, format, arguments);
+}
+
+void VlcPlayerCore::OnLogMessage(int level, const char* format,
+                                 va_list arguments) {
+  // Every message libVLC logs comes here, debug included, on any of its
+  // threads: only the refused seek's warning is ever formatted.
+  if (level != LIBVLC_WARNING || format == nullptr ||
+      std::strstr(format, kRefusedSeekFormat) == nullptr ||
+      std::strstr(format, kRefusedSeekTail) == nullptr) {
+    return;
+  }
+  char text[160];
+  std::vsnprintf(text, sizeof(text), format, arguments);
+  const char* number = std::strpbrk(text, "0123456789");
+  const long long microseconds =
+      number == nullptr ? -1 : std::strtoll(number, nullptr, 10);
+  seek_refused_at_ = microseconds < 0 ? -1 : microseconds / 1000;
+  ++seek_refusals_;
+  if (on_changed_) {
+    on_changed_();
+  }
+}
+
 std::string VlcPlayerCore::SetSource(const std::string& uri,
                                      const std::vector<std::string>& headers,
                                      const std::vector<std::string>&
                                          media_options,
                                      int64_t start_position,
-                                     bool auto_play) {
+                                     bool auto_play,
+                                     bool keep_picture) {
   const auto error = ActiveError();
   if (!error.empty()) {
     return error;
@@ -242,23 +475,40 @@ std::string VlcPlayerCore::SetSource(const std::string& uri,
     return "A non-empty uri is required.";
   }
 
+  std::unique_ptr<VLC::Media> media;
   try {
-    VLC::Media media(*instance_, uri, VLC::Media::FromLocation);
+    media = std::make_unique<VLC::Media>(*instance_, uri,
+                                         VLC::Media::FromLocation);
     for (const auto& header : headers) {
-      media.addOption(header);
+      media->addOption(header);
     }
     for (const auto& option : media_options) {
-      media.addOption(option);
+      media->addOption(option);
     }
     if (start_position > 0) {
       std::ostringstream option;
       option << ":start-time=" << (static_cast<double>(start_position) / 1000);
-      media.addOption(option.str());
+      media->addOption(option.str());
     }
-    player_->setMedia(media);
   } catch (const std::exception&) {
     return "Unable to create VLC media.";
   }
+
+  // A player that has had a source is not handed another: set_media would
+  // wait here for the old stream's input thread (spec 3).
+  if (media_ != nullptr) {
+    ReplacePlayer();
+  }
+  // Only a reopen that keeps its picture, or one while a hold is on, asks
+  // the sink: Hold copies the picture on screen.
+  const bool has_picture =
+      (keep_picture || picture_hold_.held()) && frame_sink_->Hold();
+  if (picture_hold_.Arm(keep_picture, has_picture) ==
+      VlcPictureHold::Change::kRelease) {
+    frame_sink_->ReleaseHold();
+  }
+  player_->setMedia(*media);
+  media_ = std::move(media);
 
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -303,7 +553,16 @@ std::string VlcPlayerCore::Stop() {
   if (!error.empty()) {
     return error;
   }
-  player_->stop();
+  // Not stop(), which waits for the stream on this thread. The source stays
+  // loaded on the fresh player, so play() after Stop starts it again, as
+  // libVLC's own stop leaves it.
+  ReplacePlayer();
+  if (picture_hold_.Release() == VlcPictureHold::Change::kRelease) {
+    frame_sink_->ReleaseHold();
+  }
+  if (media_ != nullptr) {
+    player_->setMedia(*media_);
+  }
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     state_override_ = "stopped";
@@ -317,6 +576,15 @@ std::string VlcPlayerCore::SeekTo(int64_t milliseconds) {
     return error;
   }
   player_->setTime(std::max<int64_t>(0, milliseconds));
+  return "";
+}
+
+std::string VlcPlayerCore::SeekToFraction(double fraction) {
+  const auto error = ActiveError();
+  if (!error.empty()) {
+    return error;
+  }
+  player_->setPosition(static_cast<float>(std::clamp(fraction, 0.0, 1.0)));
   return "";
 }
 
@@ -343,6 +611,11 @@ std::string VlcPlayerCore::SetPlaybackSpeed(double speed) {
     return "A finite positive playback speed is required.";
   }
   player_->setRate(static_cast<float>(speed));
+  {
+    // Kept for the next player: a source after this one gets a fresh one.
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    rate_ = speed;
+  }
   return "";
 }
 
@@ -353,6 +626,10 @@ std::string VlcPlayerCore::SetAudioDelay(int64_t microseconds) {
   }
   if (!player_->setAudioDelay(microseconds)) {
     return "VLC failed to set audio delay.";
+  }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    audio_delay_ = microseconds;
   }
   return "";
 }
@@ -365,6 +642,10 @@ std::string VlcPlayerCore::SetSubtitleDelay(int64_t microseconds) {
   if (player_->setSpuDelay(microseconds) != 0) {
     return "VLC failed to set subtitle delay.";
   }
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    subtitle_delay_ = microseconds;
+  }
   return "";
 }
 
@@ -375,6 +656,9 @@ std::string VlcPlayerCore::SetSubtitleLook(const VlcSubtitleLookValues& look,
   if (!error.empty()) {
     return error;
   }
+  // Kept for the next player: a source after this one gets a fresh one.
+  subtitle_look_ = look;
+  has_subtitle_look_ = true;
   vlc_subtitle_look values;
   values.text_scale = look.text_scale;
   values.color = look.color;
@@ -458,10 +742,13 @@ std::vector<uint8_t> VlcPlayerCore::TakeSnapshot(uint32_t width,
 }
 
 std::vector<VlcTrackDescription> VlcPlayerCore::GetAudioTracks() {
-  if (!is_valid()) {
+  // Snapshot() calls this off the platform thread, which may be swapping the
+  // player: a copy, never player_ itself.
+  const auto player = disposed_.load() ? nullptr : CurrentPlayer();
+  if (player == nullptr) {
     return {};
   }
-  return TrackDescriptions(player_->audioTrackDescription());
+  return TrackDescriptions(player->audioTrackDescription());
 }
 
 std::string VlcPlayerCore::SetAudioTrack(int id) {
@@ -476,10 +763,12 @@ std::string VlcPlayerCore::SetAudioTrack(int id) {
 }
 
 std::vector<VlcTrackDescription> VlcPlayerCore::GetSubtitleTracks() {
-  if (!is_valid()) {
+  // See GetAudioTracks.
+  const auto player = disposed_.load() ? nullptr : CurrentPlayer();
+  if (player == nullptr) {
     return {};
   }
-  return TrackDescriptions(player_->spuDescription());
+  return TrackDescriptions(player->spuDescription());
 }
 
 std::string VlcPlayerCore::SetSubtitleTrack(int id) {
@@ -588,7 +877,15 @@ VlcMediaStats VlcPlayerCore::GetMediaStats() {
 
 VlcSnapshot VlcPlayerCore::Snapshot() {
   VlcSnapshot snapshot;
-  if (!is_valid()) {
+  // Numbered before anything is read: a snapshot begun before a command
+  // describes the player before it, however late it is finished (FORK.md
+  // 37).
+  snapshot.sequence = ++snapshot_sequence_;
+  // Off the platform thread, which may be swapping the player: a copy, kept
+  // alive by this reference until the snapshot is done (see ReleaseLater).
+  const auto player =
+      init_error_.empty() && !disposed_.load() ? CurrentPlayer() : nullptr;
+  if (player == nullptr) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     snapshot.volume = volume_;
     if (!error_description_.empty()) {
@@ -598,8 +895,15 @@ VlcSnapshot VlcPlayerCore::Snapshot() {
     snapshot.error_description = error_description_;
     return snapshot;
   }
+  // The hold decision, not the sink's pixels: the sink lets a hold go at its
+  // next finished picture, and bridges a plain source's swap the same way.
+  // The time report that ends a hold asks for this snapshot (OnTimeChanged),
+  // so the end and the new size reach Dart together (FORK.md 30).
+  snapshot.picture_held = picture_hold_.held();
+  snapshot.seek_refusals = seek_refusals_.load();
+  snapshot.seek_refused_at = seek_refused_at_.load();
 
-  auto media = player_->media();
+  auto media = player->media();
   if (media == nullptr) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     snapshot.state = state_override_.empty() ? "idle" : state_override_;
@@ -609,32 +913,45 @@ VlcSnapshot VlcPlayerCore::Snapshot() {
     return snapshot;
   }
 
-  const libvlc_state_t state = player_->state();
+  const libvlc_state_t state = player->state();
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (state == libvlc_Error) {
       error_code_ = "playback_error";
       error_description_ = "VLC encountered an error while playing the media.";
     }
-    snapshot.state = state_override_.empty() ? StateName(state) : state_override_;
+    const bool prebuffering =
+        buffering_percent_ >= 0.0f && buffering_percent_ < 100.0f;
+    std::string name =
+        state_override_.empty() ? StateName(state) : state_override_;
+    // libVLC 3 never reports libvlc_Buffering itself: the input says
+    // "playing" while it fills its buffer, and only the Buffering event says
+    // how full it is.
+    if (name == "playing" && prebuffering) {
+      name = "buffering";
+    }
+    snapshot.state = name;
+    snapshot.buffering_progress =
+        prebuffering ? static_cast<double>(buffering_percent_) / 100.0 : -1.0;
     snapshot.volume = volume_;
     snapshot.error_code = error_code_;
     snapshot.error_description = error_description_;
   }
-  snapshot.position = NonNegative(player_->time());
-  snapshot.duration = NonNegative(player_->length());
-  snapshot.playback_speed = static_cast<double>(player_->rate());
-  snapshot.audio_delay = player_->audioDelay();
-  snapshot.subtitle_delay = player_->spuDelay();
-  snapshot.audio_track = player_->audioTrack();
-  snapshot.subtitle_track = player_->spu();
+  snapshot.position = NonNegative(player->time());
+  snapshot.duration = NonNegative(player->length());
+  snapshot.position_fraction = static_cast<double>(player->position());
+  snapshot.playback_speed = static_cast<double>(player->rate());
+  snapshot.audio_delay = player->audioDelay();
+  snapshot.subtitle_delay = player->spuDelay();
+  snapshot.audio_track = player->audioTrack();
+  snapshot.subtitle_track = player->spu();
   {
-    // No ES event is registered on this core; the poller and the forced
-    // post-mutation snapshots diff the track SET instead. A count cannot see
-    // a same-size swap - an adaptive rendition change or an MPEG-TS PMT
-    // update replaces the audio/spu ES without changing how many there are -
-    // and a consumer that never refetches is left drawing the old names with
+    // The track SET is diffed rather than counted. A count cannot see a
+    // same-size swap - an adaptive rendition change or an MPEG-TS PMT update
+    // replaces the audio/spu ES without changing how many there are - and a
+    // consumer that never refetches is left drawing the old names with
     // nothing ticked, because the active id it is matching no longer exists.
+    // The ES events now ask for a snapshot when the set changes.
     const int64_t fingerprint =
         TrackSetFingerprint(GetAudioTracks(), GetSubtitleTracks());
     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -645,7 +962,7 @@ VlcSnapshot VlcPlayerCore::Snapshot() {
     snapshot.track_revision = track_revision_;
   }
   snapshot.is_ready = IsReadyState(snapshot.state);
-  snapshot.is_seekable = player_->isSeekable();
+  snapshot.is_seekable = player->isSeekable();
   snapshot.is_live = IsLiveState(snapshot.state) && snapshot.duration == 0 &&
                      !snapshot.is_seekable;
   // The texture's own size, which is the only size Flutter can lay it out at.
@@ -678,12 +995,25 @@ void VlcPlayerCore::Dispose() {
   if (video_output_ != nullptr) {
     video_output_->Detach();
   }
-  if (player_ != nullptr) {
-    player_->stop();
-    player_.reset();
+  std::shared_ptr<VLC::MediaPlayer> player;
+  {
+    std::lock_guard<std::mutex> lock(player_mutex_);
+    player = std::move(player_);
   }
+  if (player != nullptr) {
+    Unsubscribe(*player);
+  }
+  if (instance_ != nullptr) {
+    // Waits out a log call already running; libVLC drops later ones. The
+    // released player keeps the instance alive, and its stop still logs.
+    libvlc_log_unset(instance_->get());
+  }
+  picture_hold_.Release();
   video_output_.reset();
   on_frame_available_ = nullptr;
+  on_changed_ = nullptr;
+  // The player keeps its own reference to the instance until it is released.
+  ReleaseLater(std::move(player));
   instance_.reset();
 }
 
@@ -720,6 +1050,43 @@ uint64_t VlcPlayerCore::RenderGenerationForTesting() const {
 
 uint64_t VlcPlayerCore::TextureGenerationForTesting() const {
   return frame_sink_->TextureGenerationForTesting();
+}
+
+libvlc_media_player_t* VlcPlayerCore::PlayerForTesting() const {
+  const auto player = CurrentPlayer();
+  return player == nullptr ? nullptr : player->get();
+}
+
+uint64_t VlcPlayerCore::GenerationForTesting() const {
+  return generation_.load();
+}
+
+void VlcPlayerCore::OnBufferingForTesting(uint64_t generation, float percent) {
+  OnBuffering(generation, percent);
+}
+
+void VlcPlayerCore::OnOpeningForTesting(uint64_t generation) {
+  OnOpening(generation);
+}
+
+void VlcPlayerCore::OnTimeChangedForTesting(uint64_t generation) {
+  OnTimeChanged(generation);
+}
+
+void VlcPlayerCore::OnMediaGoneForTesting(uint64_t generation) {
+  OnMediaGone(generation);
+}
+
+void VlcPlayerCore::LogForTesting(int level, const char* format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  OnLogMessage(level, format, arguments);
+  va_end(arguments);
+}
+
+// static
+bool VlcPlayerCore::PluginBankKeptForTesting() {
+  return g_kept_instance != nullptr;
 }
 #endif  // VLC_PLAYER_TESTING
 
@@ -763,7 +1130,10 @@ bool VlcPlayerCore::IsReadyState(const std::string& state) {
 }
 
 bool VlcPlayerCore::IsLiveState(const std::string& state) {
-  return state == "buffering" || state == "playing" || state == "paused";
+  // Not "buffering": a VOD's prebuffer reports it now, and a length still
+  // unknown then would make every start look live for a moment (FORK.md 3's
+  // flap). Android and Darwin count only these two.
+  return state == "playing" || state == "paused";
 }
 
 std::string VlcPlayerCore::FourCCString(uint32_t value) {

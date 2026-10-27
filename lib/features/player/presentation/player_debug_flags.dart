@@ -74,6 +74,15 @@ Color get playerBackdropColor =>
 ///       A bisector, not a feature: playback that survives with this set and
 ///       dies without it puts the fault in the texture/compositor path rather
 ///       than in demux or decode.
+///
+///   SKYSTREAM_LIVE_DELAY_MS=6000
+///       How far behind the live edge live HLS and DASH start, in
+///       milliseconds, instead of the shipped `kLiveDelayMs`: for measuring
+///       it (spec 1.9), and for trying a live stream that stalls at the
+///       shipped value. Also a build define, for phones and tablets, whose
+///       apps get no environment:
+///       `--dart-define=SKYSTREAM_LIVE_DELAY_MS=6000`. Anything but a
+///       positive whole number is ignored.
 abstract final class PlayerDiagnostics {
   /// The environment the switches are read from.
   ///
@@ -97,4 +106,14 @@ abstract final class PlayerDiagnostics {
       const bool.fromEnvironment('SKYSTREAM_VLC_VERBOSE');
 
   static bool get suppressVideoSurface => _isOn('SKYSTREAM_NO_VIDEO');
+
+  /// The live delay to ask libVLC for instead of the shipped one, in
+  /// milliseconds; null unless `SKYSTREAM_LIVE_DELAY_MS` is a positive whole
+  /// number.
+  static int? get liveDelayMs {
+    final ms =
+        int.tryParse(environment['SKYSTREAM_LIVE_DELAY_MS']?.trim() ?? '') ??
+        const int.fromEnvironment('SKYSTREAM_LIVE_DELAY_MS');
+    return ms > 0 ? ms : null;
+  }
 }

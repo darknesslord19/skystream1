@@ -27,12 +27,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:skystream/core/providers/device_info_provider.dart';
 import 'package:skystream/features/player/presentation/vlc/player_rail.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
+import 'package:skystream/features/player/presentation/vlc/vlc_progress_bar.dart';
 import 'package:skystream/features/player/presentation/widgets/player_control_components.dart'
     show
         PlayerActionButton,
         PlayerBottomBar,
         PlayerCenterPlayButton,
         PlayerTopBar;
+import 'package:skystream/features/player/presentation/widgets/player_stream_widgets.dart';
 import 'package:skystream/features/settings/presentation/player_settings_provider.dart';
 import 'package:skystream/features/skip/data/skip_service.dart'
     show SkipSegment, SkipType;
@@ -502,6 +504,33 @@ void main() {
       expect(locked.value, isFalse);
 
       await _snapshot(tester, state: 'paused');
+    });
+    testWidgets('locking under a finger on the seek bar leaves the spinner '
+        'able to show', (tester) async {
+      // The lock swaps the bars, progress bar included, for the chip while
+      // the controls stay: the bar went mid-drag, its seek never ended, and
+      // the controls' hold hid the spinner until the next seek.
+      final locked = ValueNotifier<bool>(false);
+      addTearDown(locked.dispose);
+      await _pump(tester, locked: locked);
+      await _snapshot(tester, position: 1000);
+      final drag = await tester.startGesture(
+        tester.getCenter(find.byType(VlcProgressBar)),
+      );
+      await drag.moveBy(const Offset(40, 0));
+      await tester.pump();
+      locked.value = true;
+      await tester.pump();
+      await tester.pump();
+      await drag.up();
+      locked.value = false;
+      await tester.pump();
+
+      // The clock stops: a stall.
+      await _snapshot(tester, position: 2000);
+      await tester.pump(const Duration(milliseconds: 1100));
+      expect(find.byType(PlayerBufferingIndicator), findsOneWidget);
+      await _snapshot(tester, state: 'paused', position: 2000);
     });
   });
 }

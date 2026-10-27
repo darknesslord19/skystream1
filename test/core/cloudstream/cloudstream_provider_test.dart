@@ -9,6 +9,8 @@ import 'package:skystream/core/cloudstream/cloudstream_models.dart';
 import 'package:skystream/core/cloudstream/cloudstream_provider.dart';
 import 'package:skystream/core/domain/entity/multimedia_item.dart';
 import 'package:skystream/core/extensions/base_provider.dart';
+import 'package:skystream/core/utils/stream_quality_sorter.dart';
+import 'package:skystream/features/settings/presentation/player_settings_provider.dart';
 
 void main() {
   group('episode tokens', () {
@@ -94,6 +96,46 @@ void main() {
       }).loadStreams(CloudStreamProvider.token('x'));
       expect(links.single.url, 'https://cdn.test/a.m3u8');
       expect(await provider({'links': <Object?>[]}).loadStreams(CloudStreamProvider.token('x')), isEmpty);
+    });
+  });
+
+  group('an HLS link with no quality of its own', () {
+    CloudStreamProvider provider(Map<String, dynamic> answer) => CloudStreamProvider(
+      plugin: const CsInstalledPlugin(
+        info: CsPluginInfo(internalName: 'Arte', name: 'Arte', url: '', repositoryUrl: ''),
+        filePath: '/plugins/Arte.cs3',
+      ),
+      pluginKey: 'german/Arte',
+      info: const CsProviderInfo(name: 'Arte'),
+      host: _AnsweringHost(answer),
+    );
+
+    test('is adaptive, so it ranks and plays as a master does', () async {
+      final links = await provider({
+        'links': [
+          {'url': 'https://cdn.test/master.m3u8', 'name': 'Server', 'quality': 400, 'type': 'M3U8'},
+          {'url': 'https://cdn.test/720.m3u8', 'name': 'Server', 'quality': 720, 'type': 'M3U8'},
+          {'url': 'https://cdn.test/film.mp4', 'name': 'Server', 'quality': 400, 'type': 'VIDEO'},
+        ],
+      }).loadStreams(CloudStreamProvider.token('x'));
+      expect([for (final link in links) link.quality], [0, null, null]);
+      expect(links[1].source, 'Server · 720p', reason: 'a known quality is in the label, as before');
+    });
+
+    test('whose name states a quality keeps it, and ranks by it as before', () async {
+      final links = await provider({
+        'links': [
+          {'url': 'https://cdn.test/360/index.m3u8', 'name': 'Vidplay 360p', 'quality': 400, 'type': 'M3U8'},
+          {'url': 'https://cdn.test/hd/index.m3u8', 'name': 'Upcloud HD', 'quality': 400, 'type': 'M3U8'},
+          {'url': 'https://cdn.test/720.mp4', 'name': 'Server', 'quality': 720, 'type': 'VIDEO'},
+        ],
+      }).loadStreams(CloudStreamProvider.token('x'));
+      expect([for (final link in links) link.quality], [null, null, null]);
+      expect(
+        [for (final link in sortStreamsByQuality(links, QualityPreference.q1080)) link.source],
+        ['Upcloud HD', 'Server · 720p', 'Vidplay 360p'],
+        reason: 'not adaptive: a 360p playlist does not jump ahead of 720p',
+      );
     });
   });
 

@@ -386,6 +386,9 @@ class AddonStreamSource {
     for (final tracker in trackers) {
       buffer.write('&tr=${Uri.encodeComponent(tracker)}');
     }
+    // BEP 53's select-only: the file a season pack's row is for, which the
+    // torrent service plays instead of the pack's first video.
+    if (fileIdx case final index?) buffer.write('&so=$index');
     return buffer.toString();
   }
 
@@ -480,7 +483,7 @@ class AddonStreamSource {
       value += 45;
     }
 
-    if (isHdr) value += 12;
+    // No boost for HDR: every SkyStream path shows it washed out (P1 spec 6).
     if (isCam) value -= 150;
 
     final seeds = seeders;

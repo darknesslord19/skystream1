@@ -1370,7 +1370,7 @@ class AppLocalizationsBg extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Качеството не е гарантирано. Източниците се подреждат според това предпочитание, а поток с няколко качества се възпроизвежда в него или в най-близкото по-ниско. Възпроизвеждането зависи от това, което доставчикът реално предлага.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1499,6 +1499,16 @@ class AppLocalizationsBg extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1543,6 +1553,9 @@ class AppLocalizationsBg extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2376,4 +2389,37 @@ class AppLocalizationsBg extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Епизодична';
+
+  @override
+  String get playerQuality => 'Качество';
+
+  @override
+  String get playerQualityAuto => 'Авто';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Авто · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Автоматично (препоръчително)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Размерът се определя за всяко видео според битрейта му и паметта на това устройство.';
+
+  @override
+  String get devQoeLog => 'Журнал за QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Записва времената на възпроизвеждане в журнала на приложението';
+
+  @override
+  String get playerGoLive => 'Към предаването на живо';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time зад живото предаване';
+  }
 }

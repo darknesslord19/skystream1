@@ -1383,7 +1383,7 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'गुणवत्ता की गारंटी नहीं है। स्रोतों को पसंद के अनुसार क्रमबद्ध किया जाता है, लेकिन प्लेबैक प्रदाता द्वारा वास्तव में दी जाने वाली पेशकश पर निर्भर करता है।';
+      'गुणवत्ता की गारंटी नहीं है। स्रोत इसी पसंद के अनुसार क्रमबद्ध होते हैं, और कई गुणवत्ताओं वाली स्ट्रीम इसी गुणवत्ता में या इससे नीचे की सबसे नज़दीकी गुणवत्ता में चलती है। प्लेबैक इस पर निर्भर करता है कि प्रदाता वास्तव में क्या देता है।';
 
   @override
   String get keepSourcesOriginalOrder => 'स्रोतों को मूल क्रम में रखें';
@@ -1508,7 +1508,17 @@ class AppLocalizationsHi extends AppLocalizations {
   }
 
   @override
-  String get playerPreparingTorrent => 'Preparing torrent…';
+  String get playerPreparingTorrent => 'टोरेंट तैयार हो रहा है…';
+
+  @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total पीयर · $speed · $loaded लोड हुआ';
+  }
 
   @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
@@ -1554,7 +1564,10 @@ class AppLocalizationsHi extends AppLocalizations {
   }
 
   @override
-  String get playerReconnecting => 'Reconnecting…';
+  String get playerReconnecting => 'फिर से कनेक्ट हो रहा है…';
+
+  @override
+  String get playerWaitingForNetwork => 'नेटवर्क की प्रतीक्षा हो रही है…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2383,4 +2396,36 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'गौण';
+
+  @override
+  String get playerQuality => 'गुणवत्ता';
+
+  @override
+  String get playerQualityAuto => 'स्वतः';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'स्वतः · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'स्वतः (सुझाया गया)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'हर वीडियो के लिए उसके बिटरेट और इस डिवाइस की मेमोरी के हिसाब से तय होता है।';
+
+  @override
+  String get devQoeLog => 'QoE लॉग';
+
+  @override
+  String get devQoeLogSubtitle => 'प्लेबैक के समय ऐप लॉग में लिखता है';
+
+  @override
+  String get playerGoLive => 'लाइव पर जाएँ';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'लाइव से $time पीछे';
+  }
 }

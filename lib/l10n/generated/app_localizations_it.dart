@@ -1391,7 +1391,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'La qualità non è garantita. Le fonti sono ordinate per preferenza, ma dipendono dall\'offerta effettiva del fornitore.';
+      'La qualità non è garantita. Le fonti sono ordinate secondo questa preferenza, e uno stream con più qualità viene riprodotto in questa o nella più vicina inferiore. La riproduzione dipende da ciò che il fornitore offre davvero.';
 
   @override
   String get keepSourcesOriginalOrder =>
@@ -1521,6 +1521,16 @@ class AppLocalizationsIt extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1565,6 +1575,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2397,4 +2410,37 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Comparsa';
+
+  @override
+  String get playerQuality => 'Qualità';
+
+  @override
+  String get playerQualityAuto => 'Automatica';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automatica · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automatico (consigliato)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Dimensionato per ogni video in base al suo bitrate e alla memoria di questo dispositivo.';
+
+  @override
+  String get devQoeLog => 'Registro QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Scrive i tempi di riproduzione nel registro dell\'app';
+
+  @override
+  String get playerGoLive => 'Vai alla diretta';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time dietro la diretta';
+  }
 }

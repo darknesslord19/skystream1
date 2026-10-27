@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API-Schlüssel (Optional)",
   "enterKeyToOverrideDefault": "Schlüssel eingeben, um Standard zu überschreiben",
   "getApiKeyFromProfile": "Holen Sie sich Ihren API-Schlüssel aus dem SubSource-Profil",
-  "qualityNotGuaranteed": "Die Qualität wird nicht garantiert. Quellen werden nach Präferenz sortiert, hängen aber vom tatsächlichen Angebot des Anbieters ab.",
+  "qualityNotGuaranteed": "Die Qualität wird nicht garantiert. Quellen werden nach dieser Präferenz sortiert, und ein Stream mit mehreren Qualitäten läuft in ihr oder der nächstniedrigeren. Die Wiedergabe hängt davon ab, was der Anbieter tatsächlich anbietet.",
   "keepSourcesOriginalOrder": "Quellen in Originalreihenfolge beibehalten",
   "openLink": "Link öffnen",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Besetzung: {names}",
   "actorRoleMain": "Hauptrolle",
   "actorRoleSupporting": "Nebenrolle",
-  "actorRoleBackground": "Statistenrolle"
+  "actorRoleBackground": "Statistenrolle",
+  "playerQuality": "Qualität",
+  "playerQualityAuto": "Automatisch",
+  "playerQualityAutoPlaying": "Automatisch · {height}",
+  "networkBufferAuto": "Automatisch (empfohlen)",
+  "networkBufferAutoHint": "Für jedes Video anhand seiner Bitrate und des Speichers dieses Geräts bemessen.",
+  "devQoeLog": "QoE-Protokoll",
+  "devQoeLogSubtitle": "Schreibt Wiedergabezeiten ins App-Protokoll",
+  "playerGoLive": "Zum Live-Bild",
+  "playerBehindLive": "{time} hinter Live"
 }

@@ -1389,7 +1389,7 @@ class AppLocalizationsUr extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'کوالٹی کی ضمانت نہیں ہے۔ ذرائع اسی ترجیح کے مطابق ترتیب دیے جاتے ہیں، اور کئی کوالٹیز والی اسٹریم اسی کوالٹی میں یا اس سے نیچے قریب ترین کوالٹی میں چلتی ہے۔ پلے بیک اس پر منحصر ہے کہ فراہم کنندہ اصل میں کیا پیش کرتا ہے۔';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1517,6 +1517,16 @@ class AppLocalizationsUr extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1561,6 +1571,9 @@ class AppLocalizationsUr extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2393,4 +2406,36 @@ class AppLocalizationsUr extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'ضمنی';
+
+  @override
+  String get playerQuality => 'کوالٹی';
+
+  @override
+  String get playerQualityAuto => 'آٹو';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'آٹو · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'آٹو (تجویز کردہ)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'ہر ویڈیو کے لیے اس کے بٹ ریٹ اور اس ڈیوائس کی میموری کے مطابق سائز طے ہوتا ہے۔';
+
+  @override
+  String get devQoeLog => 'QoE لاگ';
+
+  @override
+  String get devQoeLogSubtitle => 'پلے بیک کے اوقات ایپ لاگ میں لکھتا ہے';
+
+  @override
+  String get playerGoLive => 'لائیو پر جائیں';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'لائیو سے $time پیچھے';
+  }
 }

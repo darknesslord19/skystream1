@@ -12,6 +12,7 @@ import '../../../core/domain/entity/multimedia_item.dart';
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/router/app_router.dart';
 import 'widgets/settings_widgets.dart';
+import '../../player/domain/qoe_log.dart';
 
 import 'package:skystream/l10n/generated/app_localizations.dart';
 
@@ -32,6 +33,10 @@ class DeveloperOptionsScreen extends ConsumerStatefulWidget {
 class _DeveloperOptionsScreenState
     extends ConsumerState<DeveloperOptionsScreen> {
   bool _devLoadAssets = false;
+
+  /// Read from the flag app start set from storage, so this screen opens
+  /// without a storage read of its own.
+  bool _qoeLog = QoeLog.writeToAppLog;
 
   @override
   void initState() {
@@ -103,7 +108,6 @@ class _DeveloperOptionsScreenState
                     icon: Icons.bug_report_rounded,
                     title: l10n.viewLogs,
                     subtitle: l10n.viewLogsSubtitle,
-                    isLast: true,
                     onTap: () {
                       if (kDebugMode) {
                         unawaited(const AppLogsRoute().push<void>(context));
@@ -117,6 +121,14 @@ class _DeveloperOptionsScreenState
                             );
                       }
                     },
+                  ),
+                  SettingsTile(
+                    icon: Icons.timeline_rounded,
+                    title: l10n.devQoeLog,
+                    subtitle: l10n.devQoeLogSubtitle,
+                    isLast: true,
+                    trailing: Switch(value: _qoeLog, onChanged: _setQoeLog),
+                    onTap: () => _setQoeLog(!_qoeLog),
                   ),
                 ],
               ),
@@ -176,6 +188,14 @@ class _DeveloperOptionsScreenState
     await ref
         .read(extensionsControllerProvider.notifier)
         .loadInstalledPlugins();
+  }
+
+  /// Turns the QoE log's app-log lines on or off, at once and for later
+  /// launches.
+  Future<void> _setQoeLog(bool enabled) async {
+    QoeLog.writeToAppLog = enabled;
+    setState(() => _qoeLog = enabled);
+    await ref.read(settingsRepositoryProvider).setDevQoeLog(enabled);
   }
 
   Future<void> _pickLocalVideo(BuildContext context) async {

@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "کوالٹی کی ضمانت نہیں ہے۔ ذرائع اسی ترجیح کے مطابق ترتیب دیے جاتے ہیں، اور کئی کوالٹیز والی اسٹریم اسی کوالٹی میں یا اس سے نیچے قریب ترین کوالٹی میں چلتی ہے۔ پلے بیک اس پر منحصر ہے کہ فراہم کنندہ اصل میں کیا پیش کرتا ہے۔",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "کاسٹ: {names}",
   "actorRoleMain": "مرکزی",
   "actorRoleSupporting": "معاون",
-  "actorRoleBackground": "ضمنی"
+  "actorRoleBackground": "ضمنی",
+  "playerQuality": "کوالٹی",
+  "playerQualityAuto": "آٹو",
+  "playerQualityAutoPlaying": "آٹو · {height}",
+  "networkBufferAuto": "آٹو (تجویز کردہ)",
+  "networkBufferAutoHint": "ہر ویڈیو کے لیے اس کے بٹ ریٹ اور اس ڈیوائس کی میموری کے مطابق سائز طے ہوتا ہے۔",
+  "devQoeLog": "QoE لاگ",
+  "devQoeLogSubtitle": "پلے بیک کے اوقات ایپ لاگ میں لکھتا ہے",
+  "playerGoLive": "لائیو پر جائیں",
+  "playerBehindLive": "لائیو سے {time} پیچھے"
 }

@@ -194,4 +194,136 @@ void main() {
       expect(methodsOn(harness), isEmpty);
     });
   });
+
+  group('a video not playing yet when the app leaves', () {
+    // libVLC 3.0.24 stops an input that can't pause yet
+    // (libvlc_media_player_set_pause, lib/media_player.c), so the pause waits
+    // for the first `playing` (FORK.md 35).
+    Map<String, Object?> state(String name, {int position = 0}) =>
+        <String, Object?>{
+          'state': name,
+          'position': position,
+          'duration': 3600000,
+          'isReady': name == 'playing',
+        };
+
+    Future<VlcPlayerController> opening({
+      VlcBackgroundPolicy policy = VlcBackgroundPolicy.pause,
+    }) async {
+      final controller = VlcPlayerController(
+        config: VlcPlayerConfig(backgroundPolicy: policy),
+      );
+      harness.mockEventChannel(1);
+      await harness.attachController(controller, 1);
+      await harness.sendEvent(1, state('opening'));
+      harness.calls.clear();
+      return controller;
+    }
+
+    test('is paused once it plays, and resumed on the way back', () async {
+      final controller = await opening();
+      addTearDown(controller.dispose);
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      expect(methodsOn(harness), isEmpty);
+
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), <String>['pause']);
+      expect(controller.pauseRequests, 1, reason: 'a pause that was asked for');
+
+      harness.calls.clear();
+      await setAppLifecycleState(AppLifecycleState.resumed);
+      expect(methodsOn(harness), <String>['play']);
+    });
+
+    test('one the engine still calls idle just after its play is paused once '
+        'it plays', () async {
+      // Windows' and Linux's core report idle for a moment after a play, until
+      // libVLC opens the input: leaving then kept no claim, and the video
+      // played on in the background (P1 Part 4's Windows run).
+      final controller = VlcPlayerController(
+        config: const VlcPlayerConfig(
+          backgroundPolicy: VlcBackgroundPolicy.pause,
+        ),
+      );
+      addTearDown(controller.dispose);
+      harness.mockEventChannel(1);
+      await harness.attachController(controller, 1);
+      await controller.setMedia(
+        VlcMediaSource(uri: Uri.parse('https://example.com/film.mp4')),
+        autoPlay: true,
+      );
+      await harness.sendEvent(1, state('idle'));
+      harness.calls.clear();
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      expect(methodsOn(harness), isEmpty);
+
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), <String>['pause']);
+    });
+
+    test('an idle media nobody asked to play keeps no claim', () async {
+      final controller = VlcPlayerController(
+        config: const VlcPlayerConfig(
+          backgroundPolicy: VlcBackgroundPolicy.pause,
+        ),
+      );
+      addTearDown(controller.dispose);
+      harness.mockEventChannel(1);
+      await harness.attachController(controller, 1);
+      await controller.setMedia(
+        VlcMediaSource(uri: Uri.parse('https://example.com/film.mp4')),
+      );
+      await harness.sendEvent(1, state('idle'));
+      harness.calls.clear();
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), isEmpty);
+    });
+
+    test('a rebuffer after a seek is paused once it plays again', () async {
+      final controller = await playing(policy: VlcBackgroundPolicy.pause);
+      addTearDown(controller.dispose);
+      await harness.sendEvent(1, state('buffering', position: 30000));
+      harness.calls.clear();
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      expect(methodsOn(harness), isEmpty);
+
+      await harness.sendEvent(1, state('playing', position: 31000));
+      expect(methodsOn(harness), <String>['pause']);
+    });
+
+    test('coming back before it plays pauses nothing', () async {
+      final controller = await opening();
+      addTearDown(controller.dispose);
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      await setAppLifecycleState(AppLifecycleState.resumed);
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), isEmpty);
+    });
+
+    test('a play while away is not paused', () async {
+      final controller = await opening();
+      addTearDown(controller.dispose);
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      await controller.play();
+      harness.calls.clear();
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), isEmpty);
+    });
+
+    test('keepPlaying leaves it alone', () async {
+      final controller = await opening(policy: VlcBackgroundPolicy.keepPlaying);
+      addTearDown(controller.dispose);
+
+      await setAppLifecycleState(AppLifecycleState.paused);
+      await harness.sendEvent(1, state('playing', position: 400));
+      expect(methodsOn(harness), isEmpty);
+    });
+  });
 }

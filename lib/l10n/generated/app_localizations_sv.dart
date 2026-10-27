@@ -1376,7 +1376,7 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Kvaliteten garanteras inte. Källor sorteras efter den här inställningen, och en ström med flera kvaliteter spelas i den eller den närmaste lägre. Uppspelningen beror på vad leverantören faktiskt erbjuder.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1504,6 +1504,16 @@ class AppLocalizationsSv extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1548,6 +1558,9 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2380,4 +2393,36 @@ class AppLocalizationsSv extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Statist';
+
+  @override
+  String get playerQuality => 'Kvalitet';
+
+  @override
+  String get playerQualityAuto => 'Automatisk';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automatisk · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automatisk (rekommenderas)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Anpassas för varje video efter dess bithastighet och enhetens minne.';
+
+  @override
+  String get devQoeLog => 'QoE-logg';
+
+  @override
+  String get devQoeLogSubtitle => 'Skriver uppspelningstider till appens logg';
+
+  @override
+  String get playerGoLive => 'Gå till live';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time efter live';
+  }
 }

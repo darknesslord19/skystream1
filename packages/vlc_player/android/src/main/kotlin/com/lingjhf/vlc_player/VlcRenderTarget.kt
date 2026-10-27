@@ -1,6 +1,9 @@
 package com.lingjhf.vlc_player
 
 import android.content.Context
+import android.graphics.Color
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import io.flutter.view.TextureRegistry
 import org.videolan.libvlc.util.VLCVideoLayout
 
@@ -14,14 +17,32 @@ import org.videolan.libvlc.util.VLCVideoLayout
  */
 internal sealed interface VlcRenderTarget {
     /**
-     * A [VLCVideoLayout] inside a platform view.
+     * [VLCVideoLayout]s inside a platform view, one for each player.
      *
-     * libVLC decodes into the layout's TextureView and Flutter then composites
-     * that view as a texture of its own: two full-frame compositions per frame,
-     * a frame of latency, and the platform view's input and focus plumbing.
+     * libVLC decodes into a layout's TextureView and Flutter then composites
+     * the platform view as a texture of its own: two full-frame compositions
+     * per frame, a frame of latency, and the platform view's input and focus
+     * plumbing.
+     *
+     * A player's video output can keep its surface until the player's stop
+     * has returned, and a second output can't share it meanwhile, so every
+     * player gets a layout of its own (FORK.md 29). [container] stacks them,
+     * with the held picture over them.
      */
-    class VideoLayout(context: Context) : VlcRenderTarget {
-        val layout = VLCVideoLayout(context)
+    class VideoLayout(private val context: Context) : VlcRenderTarget {
+        /** The platform view's view. */
+        val container = FrameLayout(context).apply { setBackgroundColor(Color.BLACK) }
+
+        /** A layout for a new player, under every other one until its first picture. */
+        fun newLayout(): VLCVideoLayout {
+            val layout = VLCVideoLayout(context)
+            container.addView(
+                layout,
+                0,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT),
+            )
+            return layout
+        }
     }
 
     /**

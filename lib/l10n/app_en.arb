@@ -748,7 +748,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by this preference, and a stream that offers several qualities plays at it, or the nearest below. Playback depends on what the provider actually offers.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "diagnostics": "Diagnostics",
@@ -850,6 +850,16 @@
   "@playerPreparingTorrent": {
     "description": "Progress note while a magnet is being seeded, before the engine has anything to open."
   },
+  "playerTorrentPeers": "{connected}/{total} peers · {speed} · {loaded} loaded",
+  "@playerTorrentPeers": {
+    "description": "Under 'Preparing torrent…' while a torrent gets ready: peers connected out of those known, the download speed (for example '1.4 MB/s') and how much of the torrent is loaded (for example '24 MB').",
+    "placeholders": {
+      "connected": {"type": "int"},
+      "total": {"type": "int"},
+      "speed": {"type": "String"},
+      "loaded": {"type": "String"}
+    }
+  },
   "playerReasonTorrentNotPrepared": "torrent could not be prepared",
   "@playerReasonTorrentNotPrepared": {
     "description": "Why one source gave up. A lowercase fragment: it is shown alone when there is only one source, or after a dash in playerNoSourcesPlayableWithReason."
@@ -909,7 +919,11 @@
   },
   "playerReconnecting": "Reconnecting…",
   "@playerReconnecting": {
-    "description": "Status pill over a frame that has stopped moving, shown from the moment the player first re-issues its request to the source until the position moves again or the source is replaced. Also the opening line while a dropped live feed is being reopened."
+    "description": "Status pill over a picture that has stopped moving while the player recovers the same source: from the moment it first re-issues its request, or checks the source after a failure, until the position moves again or another source is opened."
+  },
+  "playerWaitingForNetwork": "Waiting for network…",
+  "@playerWaitingForNetwork": {
+    "description": "Status pill over the last picture while the device reports no network and the player waits for it to come back; also the start-up view's status line when nothing has played yet."
   },
   "playerSpeedNormal": "Normal",
   "@playerSpeedNormal": {
@@ -1845,6 +1859,25 @@
   "@actorRoleSupporting": {"description": "Cast card: a supporting character."},
   "actorRoleBackground": "Background",
   "@actorRoleBackground": {"description": "Cast card: a background (minor) character."},
+  "playerQuality": "Quality",
+  "playerQualityAuto": "Auto",
+  "playerQualityAutoPlaying": "Auto · {height}",
+  "@playerQuality": {"description": "Player side panel: the tab that chooses which of an HLS stream's qualities plays (Auto, or a height such as 1080p)."},
+  "@playerQualityAuto": {"description": "Player's Quality tab: the row that lets the player choose, following the device and the viewer's quality preference."},
+  "@playerQualityAutoPlaying": {"description": "Player's Quality tab: the Auto row while Auto is on, naming the quality it plays now.", "placeholders": {"height": {"type": "String", "example": "1080p"}}},
+  "@qualityNotGuaranteed": {"description": "Note under the Wi-Fi & Wired and Mobile quality preference pickers: sources are sorted by the preference, and a stream offering several qualities (HLS) plays at it or the nearest below."},
+  "networkBufferAuto": "Auto (recommended)",
+  "networkBufferAutoHint": "Sized for each video from its bitrate and this device's memory.",
+  "devQoeLog": "QoE log",
+  "devQoeLogSubtitle": "Writes playback timings to the app log",
+  "playerGoLive": "Go to live",
+  "playerBehindLive": "{time} behind live",
+  "@networkBufferAuto": {"description": "Player settings, network buffer: the choice that sizes the buffer for each video by itself. It is the default."},
+  "@networkBufferAutoHint": {"description": "Player settings, network buffer dialog: the line under the Auto choice, saying how Auto sizes the buffer."},
+  "@devQoeLog": {"description": "Developer options: the switch that writes playback-quality (QoE) events to the app log. \"QoE\" stays as it is."},
+  "@devQoeLogSubtitle": {"description": "Developer options: the line under the QoE log switch."},
+  "@playerGoLive": {"description": "Player, live stream: the button that jumps back to the live edge."},
+  "@playerBehindLive": {"description": "Player, live stream: spoken label for how far behind the live edge playback is, such as \"0:42 behind live\".", "placeholders": {"time": {"type": "String", "example": "0:42"}}},
   "colorTheme": "Colour theme",
   "colorThemeDynamic": "Dynamic (device colours)",
   "colorThemeHint": "Pick an accent and background. Dynamic follows your wallpaper."

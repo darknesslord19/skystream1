@@ -129,7 +129,20 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   ///
   /// Use this when the item needs HTTP headers, VLC media options, or an
   /// initial seek position. This clears any active playlist.
-  Future<void> setMedia(VlcMediaSource source, {bool autoPlay = false});
+  ///
+  /// [keepPicture] asks the output to keep showing the current picture until
+  /// the new media plays from where it was asked to start, rather than the
+  /// new media's first decoded picture: see [VlcPlayerValue.isPictureHeld].
+  /// It is for reopening the same film at a position. It does nothing when
+  /// nothing is on screen yet, or on an output that cannot hold.
+  ///
+  /// While the picture is held, [pendingSeekTarget] is [source]'s start
+  /// position: the engine reports 0 until the new media plays from there.
+  Future<void> setMedia(
+    VlcMediaSource source, {
+    bool autoPlay = false,
+    bool keepPicture = false,
+  });
 
   /// Caps the reported [VlcPlayerValue.duration] at [cap], for a media whose
   /// length libVLC gets wrong; null lifts the cap from the next report on.
@@ -205,6 +218,9 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   Future<void> pause();
 
   /// Stops playback.
+  ///
+  /// With no native player attached yet, the media given to [setMedia] opens
+  /// stopped when one attaches, instead of starting on its own.
   Future<void> stop();
 
   /// Seeks to [position].
@@ -215,6 +231,21 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// sent the latest target once the seeks stop arriving for a window. The
   /// returned future completes once the seek is sent or, merged, taken.
   Future<void> seekTo(Duration position);
+
+  /// Seeks to [fraction], from `0.0` to `1.0`, of the window a live HLS or
+  /// DASH stream still lists (`libvlc_media_player_set_position`).
+  ///
+  /// [VlcPlayerValue.duration] is that window's length and
+  /// [VlcPlayerValue.positionFraction] where playback is in it; without both
+  /// there is no window, and this throws a [StateError]. For a live HLS
+  /// stream ([VlcMediaSource.isLive]) the controller works that place out
+  /// itself: libVLC 3 counts the stream's time from where it was joined but
+  /// measures the window from the playlist it last read, so its own fraction
+  /// runs ahead of the window as it moves on. It goes the way
+  /// [seekTo] goes - [pendingSeekTarget] moves at once to the matching
+  /// position, and seeks within [seekMergeWindow] are merged - but the engine
+  /// is sent the window's fraction rather than a time.
+  Future<void> seekToWindowFraction(double fraction);
 
   /// How long after a seek has gone to the engine further seeks are held and
   /// merged into one.
@@ -246,6 +277,13 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// get there (stopped, ended, failed, new media); and when playback carries
   /// on somewhere else without ever arriving, which is an engine that did not
   /// take the seek at all.
+  ///
+  /// A [setMedia] given `keepPicture` and a start position sets it too, to
+  /// that start, once the native side has answered and while the output
+  /// holds the picture: the engine reports 0 until the new media plays from
+  /// its start. That target is never sent and never counted in
+  /// [seekRequests]; it goes when the hold ends or the media can no longer
+  /// play, and a [seekTo] replaces it with a seek from the start.
   ValueListenable<Duration?> get pendingSeekTarget;
 
   /// How many seeks have been asked for on this controller.
@@ -259,6 +297,19 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// forward. Comparing this against a remembered value tells a host the freeze
   /// it is looking at was asked for.
   int get seekRequests;
+
+  /// How many pauses and stops this controller has been asked for, or has
+  /// made itself.
+  ///
+  /// Only ever increases, and increases the moment one is asked for, as
+  /// [seekRequests] does: every [pause] and [stop], a playlist's own stop,
+  /// the pause [backgroundPolicy] sends as the app goes away, and an open it
+  /// turns into a stopped one because the app is away. A host watching for a
+  /// stop nobody asked for - the engine's own, after a failure it did not
+  /// report as one - compares this against a remembered value. A pause the
+  /// system makes for an audio interruption is not counted:
+  /// [VlcPlayerValue.interruption] says so.
+  int get pauseRequests;
 
   /// Where playback is at this moment, for anything drawn against the
   /// picture between the engine's reports - subtitle lines a host draws
@@ -371,6 +422,21 @@ const Duration _kSeekLandsLongBy = Duration(milliseconds: 750);
 /// seconds of playback carrying on at the rate positions are published.
 const int _kSeekIgnoredAfterMoves = 12;
 
+/// How far a refusal libVLC logged may be from the time a seek sent, and
+/// still be that seek's: the log carries the time libVLC was asked for, in
+/// microseconds, and a merged or live seek goes out rounded.
+const int _kSeekRefusalMatchMs = 1000;
+
+/// How many times a seek libVLC keeps refusing is sent again. A refusal is
+/// libVLC's own word, so each one is worth answering; a stream that refuses
+/// every time is not going to change its mind.
+const int _kSeekRefusalResends = 3;
+
+/// Where the reports after a seek was sent stand against its echo: none at
+/// the time sent yet, the echo seen, or a report from somewhere else since.
+/// See `_followSeekEcho`.
+enum _SeekEcho { awaited, seen, over }
+
 class _VlcPlayerController extends VlcPlayerController
     implements VlcPlayerControllerInternals {
   _VlcPlayerController({
@@ -442,6 +508,13 @@ class _VlcPlayerController extends VlcPlayerController
   /// to trust the live position - see [_mediaForAttach].
   bool _hasPlayedSinceMedia = false;
 
+  /// Whether a play has been asked of the current media - its autoPlay or a
+  /// [play] - since it was set, and not taken back by a [pause] or [stop].
+  /// Until it plays, such a media is starting whatever the engine says: the
+  /// Windows and Linux core reports idle for a moment after a play, before
+  /// libVLC opens the input (FORK.md 35).
+  bool _playAskedSinceMedia = false;
+
   /// Whether an audio interruption is what paused the current playback, and
   /// whether it promised to end.
   ///
@@ -470,8 +543,22 @@ class _VlcPlayerController extends VlcPlayerController
   bool _backgrounded = false;
 
   int? _viewId;
+
+  /// Moves on with every attach and detach, so a native player whose `create`
+  /// answers after its widget has gone - superseded by a newer attach, or
+  /// detached - is disposed rather than attached over the newer one.
+  int _attachGeneration = 0;
   int? _textureId;
   VlcMediaSource? _pendingMediaSource;
+
+  /// Counts the `setSource` calls sent, so an attach can tell that media it
+  /// would send went out already, from a setMedia made while it was getting
+  /// the new player ready (FORK.md 34).
+  int _sourcesSent = 0;
+
+  /// A background pause asked for while the video was still opening or
+  /// rebuffering, sent at its first `playing` (FORK.md 35).
+  bool _pauseWhenItPlays = false;
   bool _pendingAutoPlay = false;
 
   /// External subtitles requested before a player instance existed.
@@ -507,6 +594,22 @@ class _VlcPlayerController extends VlcPlayerController
   /// running, and disarmed by any movement of the clock.
   Timer? _stallTimer;
 
+  /// When the clock last moved, and how long it took since the move before:
+  /// a clock that moves in steps of about a second gets [_stepGrace] more
+  /// before the stall flag (FORK.md 36).
+  DateTime? _lastMoveAt;
+  Duration? _lastStep;
+
+  /// From this interval between moves, the clock counts as stepping.
+  static const Duration _steppingFrom = Duration(milliseconds: 900);
+
+  /// The more a stepping clock gets: every flash measured was under 180 ms.
+  static const Duration _stepGrace = Duration(milliseconds: 250);
+
+  Duration get _stallDelay => (_lastStep ?? Duration.zero) >= _steppingFrom
+      ? stallIndicatorDelay + _stepGrace
+      : stallIndicatorDelay;
+
   /// The position of the last native snapshot, throttled or not.
   ///
   /// Kept apart from `value.position` on purpose: under [eventThrottleInterval]
@@ -529,6 +632,10 @@ class _VlcPlayerController extends VlcPlayerController
   /// arriving is playback carrying on somewhere the seek never took it.
   Duration? _seekLastSeen;
   int _seekMovesWithoutLanding = 0;
+
+  /// Whether [pendingSeekTarget] is a held reopen's start rather than a
+  /// seek; see [_publishHeldStart].
+  bool _heldStart = false;
   bool _isDisposed = false;
 
   final PlaybackClock _playbackClock = PlaybackClock();
@@ -575,6 +682,7 @@ class _VlcPlayerController extends VlcPlayerController
     if (_viewId == viewId) {
       return;
     }
+    _attachGeneration += 1;
 
     final oldViewId = _viewId;
     _viewId = null;
@@ -592,6 +700,9 @@ class _VlcPlayerController extends VlcPlayerController
     }
 
     _viewId = viewId;
+    final sentAtAttach = _sourcesSent;
+    _seekRefusals = 0;
+    _lastSequence = 0;
     _eventsSubscription = EventChannel(
       'vlc_player/events/$viewId',
     ).receiveBroadcastStream().listen(_handleEvent, onError: _handleEventError);
@@ -605,7 +716,9 @@ class _VlcPlayerController extends VlcPlayerController
     _ensureNotDisposed();
 
     final pendingMediaSource = _pendingMediaSource;
-    if (pendingMediaSource != null) {
+    // Unless a setMedia sent it while the player was being made ready: a second
+    // send would retire the player the first one opened (FORK.md 34).
+    if (pendingMediaSource != null && _sourcesSent == sentAtAttach) {
       await _setMedia(
         _mediaForAttach(pendingMediaSource),
         autoPlay: _pendingAutoPlay,
@@ -638,6 +751,7 @@ class _VlcPlayerController extends VlcPlayerController
     }
     _ensureNotDisposed();
 
+    final attach = ++_attachGeneration;
     final response = await _invokeNativeMap('create', <String, Object?>{
       'options': options,
     });
@@ -650,8 +764,16 @@ class _VlcPlayerController extends VlcPlayerController
       await _disposeNativeView(viewId);
       throw StateError('The controller has been disposed.');
     }
+    if (attach != _attachGeneration) {
+      // Superseded while the native player was being made: nothing owns it.
+      await _disposeNativeView(viewId);
+      return textureId;
+    }
 
     _viewId = viewId;
+    final sentAtAttach = _sourcesSent;
+    _seekRefusals = 0;
+    _lastSequence = 0;
     _textureId = textureId;
     _eventsSubscription = EventChannel(
       'vlc_player/events/$viewId',
@@ -666,7 +788,9 @@ class _VlcPlayerController extends VlcPlayerController
     _ensureNotDisposed();
 
     final pendingMediaSource = _pendingMediaSource;
-    if (pendingMediaSource != null) {
+    // Unless a setMedia sent it while the player was being made ready: a second
+    // send would retire the player the first one opened (FORK.md 34).
+    if (pendingMediaSource != null && _sourcesSent == sentAtAttach) {
       await _setMedia(
         _mediaForAttach(pendingMediaSource),
         autoPlay: _pendingAutoPlay,
@@ -703,6 +827,7 @@ class _VlcPlayerController extends VlcPlayerController
       httpHeaders: source.httpHeaders,
       mediaOptions: source.mediaOptions,
       startPosition: position,
+      isLive: source.isLive,
     );
   }
 
@@ -712,15 +837,22 @@ class _VlcPlayerController extends VlcPlayerController
   /// no-op. Platform-view teardown is not ordered against creation — the
   /// outgoing element's `dispose` can run after the incoming one has already
   /// attached — so an unqualified call would null out a view that is playing.
-  /// Null means "whatever is attached", which is all the texture path can say:
-  /// it never learns the id.
+  /// The texture path never learns the id, so it names the texture its create
+  /// handed back in [textureId] instead: a create that answered after its
+  /// widget was replaced has been disposed already, and the outgoing widget's
+  /// detach must not take the replacement's player with it. Null for both
+  /// means "whatever is attached".
   @override
   @internal
-  Future<void> detach({int? viewId}) async {
+  Future<void> detach({int? viewId, int? textureId}) async {
     final attachedViewId = _viewId;
     if (viewId != null && attachedViewId != viewId) {
       return;
     }
+    if (textureId != null && _textureId != textureId) {
+      return;
+    }
+    _attachGeneration += 1;
     _viewId = null;
     _textureId = null;
     await _eventsSubscription?.cancel();
@@ -769,11 +901,26 @@ class _VlcPlayerController extends VlcPlayerController
     _backgrounded = true;
     if (backgroundPolicy != VlcBackgroundPolicy.pause ||
         _pausedForBackground ||
-        _viewId == null ||
-        !value.isPlaying) {
+        _viewId == null) {
+      return;
+    }
+    if (!value.isPlaying) {
+      // An input still opening, or refilling after a seek, can't pause yet:
+      // libVLC 3 stops one instead. The pause waits for its first playing.
+      // An idle media asked to play that hasn't is opening too: the desktop
+      // core's idle between the play and libVLC's own opening.
+      final state = value.state;
+      if (state == VlcPlaybackState.opening ||
+          state == VlcPlaybackState.buffering ||
+          (state == VlcPlaybackState.idle &&
+              _playAskedSinceMedia &&
+              !_hasPlayedSinceMedia)) {
+        _pauseWhenItPlays = true;
+      }
       return;
     }
     _pausedForBackground = true;
+    _pauseRequests += 1;
     // Not the public pause(): that one is the user's, and clears the flag this
     // just set. Failures are swallowed because a player that has already gone
     // away has, for this purpose, done what was asked.
@@ -783,6 +930,7 @@ class _VlcPlayerController extends VlcPlayerController
   void _resumeFromBackground() {
     if (_isDisposed) return;
     _backgrounded = false;
+    _pauseWhenItPlays = false;
     if (!_pausedForBackground) return;
     _pausedForBackground = false;
     if (_viewId == null) {
@@ -830,7 +978,11 @@ class _VlcPlayerController extends VlcPlayerController
   }
 
   @override
-  Future<void> setMedia(VlcMediaSource source, {bool autoPlay = false}) async {
+  Future<void> setMedia(
+    VlcMediaSource source, {
+    bool autoPlay = false,
+    bool keepPicture = false,
+  }) async {
     _ensureNotDisposed();
     // New media invalidates side-car subtitles queued for the old one.
     _pendingSubtitles.clear();
@@ -842,7 +994,7 @@ class _VlcPlayerController extends VlcPlayerController
     final previousAutoPlay = _pendingAutoPlay;
     _clearPlaylist();
     try {
-      await _setMedia(source, autoPlay: autoPlay);
+      await _setMedia(source, autoPlay: autoPlay, keepPicture: keepPicture);
     } catch (_) {
       _playlist = previousPlaylist;
       _playlistIndex = previousPlaylistIndex;
@@ -1084,6 +1236,7 @@ class _VlcPlayerController extends VlcPlayerController
   Future<void> _setMedia(
     VlcMediaSource source, {
     required bool autoPlay,
+    bool keepPicture = false,
   }) async {
     _ensureNotDisposed();
     // A fresh media has not played yet, whatever the merged value still says.
@@ -1091,7 +1244,11 @@ class _VlcPlayerController extends VlcPlayerController
     // the media on its way out, and the opening buffer of the new one is the
     // startup spinner's job, not this one's.
     _hasPlayedSinceMedia = false;
+    _playAskedSinceMedia = autoPlay;
     _cancelStallTimer();
+    _pauseWhenItPlays = false;
+    _lastMoveAt = null;
+    _lastStep = null;
     // A seek's target belongs to the media it was asked of.
     _clearPendingSeek();
     _dropMergedSeek();
@@ -1108,6 +1265,7 @@ class _VlcPlayerController extends VlcPlayerController
         backgroundPolicy == VlcBackgroundPolicy.pause) {
       autoPlay = false;
       _pausedForBackground = true;
+      _pauseRequests += 1;
     }
     _pendingMediaSource = source;
     _pendingAutoPlay = autoPlay;
@@ -1117,10 +1275,101 @@ class _VlcPlayerController extends VlcPlayerController
       return;
     }
 
+    // The join a live window is counted from: see [_placeInLiveWindow].
+    _mediaSetAt = clock.now();
+    _liveWindowFromJoin = null;
+    _liveWindowAtJoin = null;
+    _sourcesSent += 1;
     await _invokeNative<void>(
       'setSource',
-      _sourceArguments(viewId, source, autoPlay: autoPlay),
+      _sourceArguments(
+        viewId,
+        source,
+        autoPlay: autoPlay,
+        keepPicture: keepPicture,
+      ),
     );
+    _publishHeldStart(source, viewId: viewId, keepPicture: keepPicture);
+  }
+
+  /// Publishes a held reopen's start as [pendingSeekTarget], once the native
+  /// side has answered `setSource`: every backend sends the new media's
+  /// opening snapshot before it answers, so the published value already says
+  /// whether the output holds. A start of 0, an output with nothing to hold,
+  /// or a newer media or player since has nothing to wait for.
+  ///
+  /// Not a seek: the start went to the engine with the media, so there is no
+  /// origin, no echo to wait for and nothing to send again, and the clock
+  /// already stands at the start ([PlaybackClock.restart] above).
+  void _publishHeldStart(
+    VlcMediaSource source, {
+    required int viewId,
+    required bool keepPicture,
+  }) {
+    if (!keepPicture ||
+        _isDisposed ||
+        _viewId != viewId ||
+        !identical(_pendingMediaSource, source) ||
+        source.startPosition <= Duration.zero) {
+      return;
+    }
+    final published = value;
+    if (!published.isPictureHeld || !_canStillLand(published.state)) return;
+    _heldStart = true;
+    _pendingSeekTarget.value = source.startPosition;
+  }
+
+  /// When the media now playing went to the engine.
+  DateTime? _mediaSetAt;
+
+  /// Whether libVLC counts this live media's window from where it was
+  /// joined; null until its first report with a window says.
+  bool? _liveWindowFromJoin;
+
+  /// The window's length in that first report: the edge then, in the
+  /// stream's time counted from the join.
+  Duration? _liveWindowAtJoin;
+
+  /// [next] with its [VlcPlayerValue.positionFraction] worked out again for a
+  /// live HLS window.
+  ///
+  /// libVLC 3.0.24 keeps a live HLS stream's time counted from the join, but
+  /// measures the window from the start of the playlist it last read, which
+  /// every refresh moves on. So its fraction is the time over the window's
+  /// length: right at the join, running ahead of the window as the window
+  /// moves on, and 0 once past 1. `set_position` does land in the window as
+  /// it is now. The window's end - the live edge - runs on with the clock
+  /// from where it was at the join, and its start is the end less its
+  /// length: a full window moves on as fast as the clock, while one still
+  /// filling up keeps its start (SkyStream's harness and suite, 2026-10-13:
+  /// every reading within a second, and a window seek on a filling playlist
+  /// landed 9.5 s off when the start was taken to move).
+  ///
+  /// Decided once per media, at the first report with a window: a fraction
+  /// that is the time over the length is counted from the join; one that
+  /// isn't - DASH's segments carry their own times - is taken as it is.
+  VlcPlayerValue _placeInLiveWindow(VlcPlayerValue next) {
+    final raw = next.positionFraction;
+    final window = next.duration;
+    final setAt = _mediaSetAt;
+    if (!(_pendingMediaSource?.isLive ?? false) ||
+        raw == null ||
+        window <= Duration.zero ||
+        setAt == null) {
+      return next;
+    }
+    if (_liveWindowFromJoin == null && raw > 0) {
+      _liveWindowFromJoin =
+          (window * raw - next.position).abs() < const Duration(seconds: 1);
+      _liveWindowAtJoin = window;
+    }
+    final atJoin = _liveWindowAtJoin;
+    if (_liveWindowFromJoin != true || atJoin == null) return next;
+    final edge = atJoin + clock.now().difference(setAt);
+    final start = edge - window;
+    final place =
+        (next.position - start).inMilliseconds / window.inMilliseconds;
+    return next.copyWith(positionFraction: place.clamp(0.0, 1.0).toDouble());
   }
 
   void _clearPlaylist() {
@@ -1152,11 +1401,14 @@ class _VlcPlayerController extends VlcPlayerController
     // outright — that refusal comes back as an interruption, and the delayed
     // grant that follows is the only thing that will ever start this playing.
     _pausedForBackground = false;
+    _pauseWhenItPlays = false;
+    _playAskedSinceMedia = true;
     return _invoke('play');
   }
 
   @override
   Future<void> pause() {
+    _pauseRequests += 1;
     _clearAutomaticPauseClaims();
     // A paused player is not stalled, it is paused. The flag itself is cleared
     // by the paused snapshot when it arrives; what must not happen is the
@@ -1168,8 +1420,16 @@ class _VlcPlayerController extends VlcPlayerController
 
   @override
   Future<void> stop() {
+    _ensureNotDisposed();
+    _pauseRequests += 1;
     _clearAutomaticPauseClaims();
     _cancelStallTimer();
+    if (_viewId == null) {
+      // Nothing to stop yet; what is queued for the player to come must not
+      // start on its own when it does.
+      _pendingAutoPlay = false;
+      return Future<void>.value();
+    }
     return _invoke('stop');
   }
 
@@ -1180,6 +1440,8 @@ class _VlcPlayerController extends VlcPlayerController
   /// started again by the return trip or by the end of the call.
   void _clearAutomaticPauseClaims() {
     _pausedForBackground = false;
+    _pauseWhenItPlays = false;
+    _playAskedSinceMedia = false;
     _pausedForAudioFocus = false;
   }
 
@@ -1188,11 +1450,36 @@ class _VlcPlayerController extends VlcPlayerController
   @override
   int get seekRequests => _seekRequests;
 
+  int _pauseRequests = 0;
+
+  @override
+  int get pauseRequests => _pauseRequests;
+
   @override
   Future<void> seekTo(Duration position) {
     if (position.isNegative) {
       throw ArgumentError.value(position, 'position', 'Must be non-negative.');
     }
+    return _seek(position, inWindow: false);
+  }
+
+  @override
+  Future<void> seekToWindowFraction(double fraction) {
+    if (!fraction.isFinite || fraction < 0 || fraction > 1) {
+      throw ArgumentError.value(fraction, 'fraction', 'Must be within 0..1.');
+    }
+    final current = value;
+    final here = current.positionFraction;
+    if (here == null || current.duration <= Duration.zero) {
+      throw StateError('The media reports no live window to seek in.');
+    }
+    // libVLC's live time and its window share one timeline, so the
+    // fraction's place is a position the landing check and the clock follow.
+    final target = current.position + current.duration * (fraction - here);
+    return _seek(target.isNegative ? Duration.zero : target, inWindow: true);
+  }
+
+  Future<void> _seek(Duration position, {required bool inWindow}) {
     _seekRequests += 1;
     // After a rebuffer, the gap between a seek and the first frame at the new
     // position is the stall a viewer feels most, so the clock restarts here
@@ -1207,13 +1494,25 @@ class _VlcPlayerController extends VlcPlayerController
     // position, and the host's resume point never records a place the engine
     // did not reach.
     _cancelStallTimer();
+    final origin = _pendingSeekTarget.value ?? value.position;
+    // A held reopen's start becomes this seek's origin, and stops being one.
+    _heldStart = false;
+    // A committed seek gets its first second (spec 4): a flag raised by the
+    // freeze before it comes down, and the clock above starts again. Not a
+    // seek to where playback already is or is going: the player screen's
+    // stall watchdog re-issues that to kick a stream that stopped, and the
+    // picture stays frozen through it.
+    if (position != origin) _clearStalled();
     if (_isRunning((_pendingThrottledValue ?? value).state)) {
       _lastNativePosition = position;
       _armStallTimer();
     }
-    _seekOrigin = _pendingSeekTarget.value ?? value.position;
+    _seekOrigin = origin;
     _seekLastSeen = value.position;
     _seekMovesWithoutLanding = 0;
+    _seekResent = false;
+    _seekRefusalResends = 0;
+    _seekInWindow = inWindow;
     _playbackClock.seek(position);
     _pendingSeekTarget.value = position;
     return _sendOrMergeSeek(position);
@@ -1284,8 +1583,33 @@ class _VlcPlayerController extends VlcPlayerController
     _seekSentTarget = null;
   }
 
-  Future<void> _sendSeek(Duration position) =>
-      _invoke('seekTo', <String, Object?>{'position': position.inMilliseconds});
+  /// Whether the seek on its way was asked for as a place in a live window
+  /// ([seekToWindowFraction]), so it goes to the engine as a fraction.
+  bool _seekInWindow = false;
+
+  Future<void> _sendSeek(Duration position) {
+    _seekEcho = _SeekEcho.awaited;
+    final fraction = _seekInWindow ? _windowFractionOf(position) : null;
+    if (fraction != null) {
+      return _invoke('seekToFraction', <String, Object?>{'fraction': fraction});
+    }
+    return _invoke('seekTo', <String, Object?>{
+      'position': position.inMilliseconds,
+    });
+  }
+
+  /// [position] as a fraction of the live window, from the latest reading:
+  /// a merged window seek, or one sent once more, goes from where playback
+  /// is now.
+  double? _windowFractionOf(Duration position) {
+    final current = value;
+    final here = current.positionFraction;
+    final window = current.duration.inMilliseconds;
+    if (here == null || window <= 0) return null;
+    final fraction =
+        here + (position - current.position).inMilliseconds / window;
+    return fraction.clamp(0.0, 1.0).toDouble();
+  }
 
   @override
   ValueListenable<Duration?> get pendingSeekTarget => _pendingSeekTarget;
@@ -1294,26 +1618,149 @@ class _VlcPlayerController extends VlcPlayerController
   /// arrived, cannot arrive, or has carried on without the seek.
   void _watchSeekLanding() {
     final target = _pendingSeekTarget.value;
-    final origin = _seekOrigin;
-    if (target == null || origin == null) return;
+    if (target == null) return;
     final published = value;
-    if (!_canStillLand(published.state) ||
-        _seekLanded(published.position, target: target, origin: origin)) {
+    if (_heldStart) {
+      // A held reopen's start lands with the hold's end - libVLC's first
+      // time report, which comes only once playback runs from the start - or
+      // never, when the media can no longer play.
+      if (!published.isPictureHeld || !_canStillLand(published.state)) {
+        _clearPendingSeek();
+      }
+      return;
+    }
+    final origin = _seekOrigin;
+    if (origin == null) return;
+    if (!_canStillLand(published.state)) {
+      _clearPendingSeek();
+      return;
+    }
+    if (_seekEcho != _SeekEcho.over &&
+        published.position == _seekSentTarget &&
+        (target - origin).abs() > _kSeekLandsShortBy) {
+      // The backend repeating the time it was just given, which says nothing
+      // about whether libVLC took the seek. See [_followSeekEcho]. A step of
+      // 3 s or less lands on it as before: past the target, a short step back
+      // has half its length to land in, less than playback moves on by the
+      // engine's next report, which could not tell a refusal from a landing.
+      _seekLastSeen = published.position;
+      return;
+    }
+    if (_timeNotKnownYet(published.position, target)) return;
+    if (_seekLanded(published.position, target: target, origin: origin)) {
       _clearPendingSeek();
       return;
     }
     final last = _seekLastSeen;
     _seekLastSeen = published.position;
     if (last == null || published.position == last) {
-      // Still: the engine is repositioning or refilling, which is what a seek
-      // on its way looks like.
-      _seekMovesWithoutLanding = 0;
+      // Still: the engine repositioning or refilling, which is what a seek on
+      // its way looks like, or a report that changed something else. Neither
+      // counts, and neither starts the count again: libVLC's time for an HLS
+      // stream moves in steps of about a second, with reports in between that
+      // change only the track list as a WebVTT track restarts, and a count
+      // started again by each of those never reached the re-send.
       return;
     }
     _seekMovesWithoutLanding += 1;
-    if (_seekMovesWithoutLanding >= _kSeekIgnoredAfterMoves) {
-      _clearPendingSeek();
+    if (_seekMovesWithoutLanding < _kSeekIgnoredAfterMoves) return;
+    if (!_seekResent) {
+      // The engine carried on without the seek: libVLC 3 has been seen
+      // dropping an HLS seek this way. Asked once more, from here, rather
+      // than giving up the viewer's target; a second miss gives it up.
+      _seekResent = true;
+      _sendSeekAgain(from: published.position, target: target);
+      return;
     }
+    _clearPendingSeek();
+  }
+
+  /// Sends the seek on its way to the engine again, from where playback is.
+  void _sendSeekAgain({required Duration from, required Duration target}) {
+    _seekMovesWithoutLanding = 0;
+    _seekOrigin = from;
+    _seekSentAt = clock.now();
+    _seekSentTarget = target;
+    // A seek on its way again, so the clock waits at its target again: an
+    // echo of the first send may have let it run on from where it was.
+    _playbackClock.seek(target);
+    unawaited(_sendSeek(target));
+  }
+
+  /// Whether the seek on its way has been sent a second time, after the
+  /// engine carried on without it. See [_watchSeekLanding].
+  bool _seekResent = false;
+
+  /// libVLC's refusals as the native player last counted them; see
+  /// [_followSeekRefusal]. A new native player counts from 0 again.
+  int _seekRefusals = 0;
+
+  /// The number of the last snapshot applied, on the desktop plugins that
+  /// number them (FORK.md 37); 0 when none has come. An older one arriving
+  /// later is not applied: Windows delivers a snapshot sent from libVLC's
+  /// event thread after one sent at once from the platform thread.
+  int _lastSequence = 0;
+
+  /// How many times the seek on its way was sent again for a refusal.
+  int _seekRefusalResends = 0;
+
+  /// Where the reports since the last seek was sent stand against its echo.
+  /// See [_followSeekEcho].
+  _SeekEcho _seekEcho = _SeekEcho.over;
+
+  /// Follows the reports after a seek is sent for its echo: the first one at
+  /// exactly the time sent, which every backend makes before libVLC has
+  /// taken the seek (VLCKit as the time is set).
+  ///
+  /// libVLC 3 can still refuse the seek. An adaptive stream with a track
+  /// restarting is "not seekable" for that moment - an HLS WebVTT track
+  /// restarts at every segment, and as it is switched on - and a refusal
+  /// flushes and refills all the same, so the time can come back again while
+  /// it buffers. Only a report from somewhere else after the echo is the
+  /// engine's own word; until then a report at the time sent lands nothing.
+  /// A report from before the seek, still on its way, comes before the echo
+  /// and changes nothing.
+  void _followSeekEcho(Duration position) {
+    final sent = _seekSentTarget;
+    if (sent == null) return;
+    _seekEcho = switch (_seekEcho) {
+      _SeekEcho.awaited when position == sent => _SeekEcho.seen,
+      _SeekEcho.seen when position != sent => _SeekEcho.over,
+      final state => state,
+    };
+  }
+
+  /// Sends the seek on its way again the moment libVLC says it refused it.
+  ///
+  /// An adaptive stream with a track restarting answers a seek "not
+  /// seekable", and libVLC 3 logs `INPUT_CONTROL_SET_TIME ... failed or not
+  /// possible` with no event. The backends that can read libVLC's log
+  /// (Darwin, Windows, Linux) count those lines and send the refused time,
+  /// so the seek goes again about a second after it was sent, rather than
+  /// after [_watchSeekLanding]'s dozen moves: about five seconds on an HLS
+  /// stream with WebVTT subtitles (SkyStream's QoE suite, 2026-10-13).
+  /// libvlc-android exposes no log, so Android keeps the dozen.
+  void _followSeekRefusal(
+    Map<Object?, Object?> event, {
+    required Duration position,
+  }) {
+    final refusals = event['seekRefusals'];
+    if (refusals is! int || refusals <= _seekRefusals) return;
+    _seekRefusals = refusals;
+    final refusedAt = event['seekRefusedAt'];
+    final target = _pendingSeekTarget.value;
+    final sent = _seekSentTarget;
+    if (refusedAt is! int || target == null || sent == null) return;
+    if ((refusedAt - sent.inMilliseconds).abs() > _kSeekRefusalMatchMs) {
+      return;
+    }
+    if (_seekRefusalResends >= _kSeekRefusalResends) return;
+    _seekRefusalResends += 1;
+    // libVLC did not move, so the seek still leaves from where it left. The
+    // position now can be the backend's echo of the target - VLCKit reports
+    // the time it was given until libVLC's next report - and an origin at the
+    // target would make the re-send's own echo read as its landing.
+    _sendSeekAgain(from: _seekOrigin ?? position, target: target);
   }
 
   /// Whether [position] shows the engine has taken the seek from [origin] to
@@ -1354,9 +1801,18 @@ class _VlcPlayerController extends VlcPlayerController
     final target = _pendingSeekTarget.value;
     final origin = _seekOrigin;
     if (target == null || origin == null) return true;
-    return !_canStillLand(next.state) ||
+    if (!_canStillLand(next.state)) return true;
+    return !_timeNotKnownYet(next.position, target) &&
         _seekLanded(next.position, target: target, origin: origin);
   }
+
+  /// Whether [position] is libVLC saying nothing yet about where a seek to
+  /// [target] went: an adaptive stream's time reads 0 for half a second or
+  /// so after a seek, while libVLC finds it again (SkyStream's harness,
+  /// 2026-10-13), and 0 is far past a step back's target in the step's
+  /// direction. A target this close to the start can land at 0.
+  static bool _timeNotKnownYet(Duration position, Duration target) =>
+      position == Duration.zero && target > _kSeekLandsShortBy;
 
   /// A paused seek still lands; a stopped, ended, errored or idle engine
   /// never will.
@@ -1377,6 +1833,10 @@ class _VlcPlayerController extends VlcPlayerController
     _seekOrigin = null;
     _seekLastSeen = null;
     _seekMovesWithoutLanding = 0;
+    _seekResent = false;
+    _seekRefusalResends = 0;
+    _seekInWindow = false;
+    _heldStart = false;
     _pendingSeekTarget.value = null;
     // Nothing is on its way any more, so the clock stops waiting for it too.
     _playbackClock.endSeek();
@@ -1558,6 +2018,8 @@ class _VlcPlayerController extends VlcPlayerController
     if (_viewId == null) {
       return Future<void>.value();
     }
+    // The host's own stop, through its playlist: see [pauseRequests].
+    _pauseRequests += 1;
     return _invoke('stop');
   }
 
@@ -1582,6 +2044,7 @@ class _VlcPlayerController extends VlcPlayerController
     int viewId,
     VlcMediaSource source, {
     required bool autoPlay,
+    bool keepPicture = false,
   }) {
     final headerOptions = vlcHeaderOptions(source.httpHeaders);
     final mediaOptions = <String>[...headerOptions, ...source.mediaOptions];
@@ -1602,6 +2065,7 @@ class _VlcPlayerController extends VlcPlayerController
       'viewId': viewId,
       'uri': source.uri.toString(),
       'autoPlay': autoPlay,
+      if (keepPicture) 'keepPicture': true,
       'httpHeaders': source.httpHeaders,
       if (mediaOptions.isNotEmpty) 'mediaOptions': mediaOptions,
       if (source.startPosition > Duration.zero)
@@ -1660,14 +2124,29 @@ class _VlcPlayerController extends VlcPlayerController
     if (_isDisposed) {
       return;
     }
+    final sequence = event is Map ? event['sequence'] : null;
+    if (sequence is int) {
+      if (sequence < _lastSequence) return;
+      _lastSequence = sequence;
+    }
     final previousValue = _pendingThrottledValue ?? value;
     final nextValue = _observeStall(
-      _capDuration(VlcPlayerValue.fromEvent(event, previousValue)),
+      _placeInLiveWindow(
+        _capDuration(VlcPlayerValue.fromEvent(event, previousValue)),
+      ),
     );
     // Every snapshot, ahead of the throttle: the clock runs on from the
-    // freshest report, and a throttled one is up to an interval old.
+    // freshest report, and a throttled one is up to an interval old. The
+    // echo is followed here too, so a published value is judged against the
+    // reports that came before it.
+    _followSeekEcho(nextValue.position);
     _playbackClock.report(nextValue, seekSettled: _seekSettledBy(nextValue));
+    if (event is Map) _followSeekRefusal(event, position: nextValue.position);
     _setValueFromEvent(previousValue, nextValue);
+    if (_pauseWhenItPlays && nextValue.isPlaying) {
+      _pauseWhenItPlays = false;
+      if (_backgrounded) _pauseForBackground();
+    }
     if (nextValue.videoSize != null &&
         nextValue.videoSize != previousValue.videoSize &&
         (_subtitleLook?.raise ?? 0) > 0) {
@@ -1780,6 +2259,9 @@ class _VlcPlayerController extends VlcPlayerController
         previousValue.trackRevision == nextValue.trackRevision &&
         previousValue.interruption == nextValue.interruption &&
         previousValue.videoSize == nextValue.videoSize &&
+        // A hold starting or ending: the screen keeps its controls over the
+        // held picture, and lays the new one out, by this (FORK.md 33).
+        previousValue.isPictureHeld == nextValue.isPictureHeld &&
         previousValue.error == nextValue.error &&
         previousValue.errorDescription == nextValue.errorDescription;
   }
@@ -1832,6 +2314,10 @@ class _VlcPlayerController extends VlcPlayerController
       return next.isStalled ? next.copyWith(isStalled: false) : next;
     }
     if (moved) {
+      final now = clock.now();
+      final last = _lastMoveAt;
+      _lastStep = last == null ? null : now.difference(last);
+      _lastMoveAt = now;
       // Movement clears the flag - and RESTARTS the countdown rather than
       // cancelling it. Every native except Android suppresses a snapshot
       // identical to the last one it sent, so a real freeze does not arrive
@@ -1866,7 +2352,7 @@ class _VlcPlayerController extends VlcPlayerController
   /// a native that repeats a frozen position (Android), the stall began at the
   /// first frozen snapshot, not the latest.
   void _armStallTimer() {
-    _stallTimer ??= Timer(stallIndicatorDelay, _markStalled);
+    _stallTimer ??= Timer(_stallDelay, _markStalled);
   }
 
   /// Restarts the countdown from now. Used on every moved snapshot, so that
@@ -1874,7 +2360,7 @@ class _VlcPlayerController extends VlcPlayerController
   /// which is what a stall looks like on the natives that go silent.
   void _restartStallTimer() {
     _stallTimer?.cancel();
-    _stallTimer = Timer(stallIndicatorDelay, _markStalled);
+    _stallTimer = Timer(_stallDelay, _markStalled);
   }
 
   void _cancelStallTimer() {
@@ -1895,6 +2381,18 @@ class _VlcPlayerController extends VlcPlayerController
     }
     if (!value.isStalled) {
       value = value.copyWith(isStalled: true);
+    }
+  }
+
+  /// Takes the stall flag down in both copies, so the next throttle flush
+  /// cannot put the stalled value back.
+  void _clearStalled() {
+    final pending = _pendingThrottledValue;
+    if (pending != null && pending.isStalled) {
+      _pendingThrottledValue = pending.copyWith(isStalled: false);
+    }
+    if (value.isStalled) {
+      value = value.copyWith(isStalled: false);
     }
   }
 

@@ -117,6 +117,17 @@ class FakeVlcEngine {
   /// no other way to say no. The call is still recorded in [calls].
   Set<String> refusedMethods = const <String>{};
 
+  /// Whether this engine holds the picture through a `keepPicture` reopen as
+  /// the natives do (FORK.md 19 and 30): the `setSource` asking for it
+  /// delivers an opening snapshot that says the picture is held, before it
+  /// answers, and every snapshot after says so until [endHold]. Off by
+  /// default, which is an output that can't hold: what every test before
+  /// Part 3 ran against.
+  bool holdsPictures = false;
+
+  /// Whether the picture is held now. See [holdsPictures].
+  bool held = false;
+
   /// The delays the engine holds, in microseconds - what `setAudioDelay` and
   /// `setSubtitleDelay` last asked for. Stamped into every snapshot so a
   /// stepper that reads `value.audioDelay` sees its own press echoed the way
@@ -129,6 +140,24 @@ class FakeVlcEngine {
 
   /// Replies held back by [holdNextReply], by method.
   final Map<String, Completer<void>> _heldReplies = <String, Completer<void>>{};
+
+  /// Whether each `create` answers with a view of its own, as the natives do,
+  /// rather than [viewId] every time: the second gets [viewId] + 1, and so on.
+  /// The extra views' event streams are mocked and stay silent; a test that
+  /// turns this on removes them with [removeExtraViews].
+  bool distinctViews = false;
+  int _created = 0;
+  final List<EventChannel> _extraEvents = <EventChannel>[];
+
+  /// Unmocks the event streams [distinctViews] added.
+  void removeExtraViews() {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    for (final channel in _extraEvents) {
+      messenger.setMockStreamHandler(channel, null);
+    }
+    _extraEvents.clear();
+  }
 
   /// Holds back the reply to the next call to [method] until the returned
   /// completer completes. The call itself is recorded and acted on at once,
@@ -211,6 +240,7 @@ class FakeVlcEngine {
     'trackRevision': trackRevision,
     'audioDelay': audioDelayUs,
     'subtitleDelay': subtitleDelayUs,
+    if (holdsPictures) 'pictureHeld': held,
     ...partial,
   };
 
@@ -227,6 +257,15 @@ class FakeVlcEngine {
           null,
         );
     return snapshot;
+  }
+
+  /// The held reopen's first time report: libVLC plays from the start
+  /// position, the hold ends, and the new media's [partial] arrives with it.
+  Future<Map<String, Object?>> endHold([
+    Map<String, Object?> partial = const <String, Object?>{},
+  ]) {
+    held = false;
+    return emit(partial);
   }
 
   /// A track arrived or left outside [addSubtitle] - a demuxer finishing its
@@ -261,6 +300,19 @@ class FakeVlcEngine {
     } on PlatformException catch (error) {
       refusal = error;
     }
+    if (call.method == 'setSource' && holdsPictures) {
+      // The natives send the new media's opening snapshot before they answer
+      // setSource, so the controller knows whether the hold took by the time
+      // setMedia returns.
+      final arguments = call.arguments as Map<Object?, Object?>;
+      this.held = arguments['keepPicture'] == true;
+      await emit(<String, Object?>{
+        'state': 'opening',
+        'position': 0,
+        'duration': 0,
+        'isSeekable': false,
+      });
+    }
     if (held != null) await held.future;
     if (refusal != null) throw refusal;
     return answer;
@@ -275,7 +327,17 @@ class FakeVlcEngine {
     }
     switch (call.method) {
       case 'create':
-        return <String, Object?>{'viewId': viewId, 'textureId': viewId};
+        final id = distinctViews ? viewId + _created++ : viewId;
+        if (id != viewId) {
+          final channel = EventChannel('vlc_player/events/$id');
+          _extraEvents.add(channel);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockStreamHandler(
+                channel,
+                MockStreamHandler.inline(onListen: (arguments, sink) {}),
+              );
+        }
+        return <String, Object?>{'viewId': id, 'textureId': id};
       case 'getAudioTracks':
         return audio;
       case 'getSubtitleTracks':

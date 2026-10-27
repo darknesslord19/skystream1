@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Kvaliteten garanteras inte. Källor sorteras efter den här inställningen, och en ström med flera kvaliteter spelas i den eller den närmaste lägre. Uppspelningen beror på vad leverantören faktiskt erbjuder.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Medverkande: {names}",
   "actorRoleMain": "Huvudroll",
   "actorRoleSupporting": "Biroll",
-  "actorRoleBackground": "Statist"
+  "actorRoleBackground": "Statist",
+  "playerQuality": "Kvalitet",
+  "playerQualityAuto": "Automatisk",
+  "playerQualityAutoPlaying": "Automatisk · {height}",
+  "networkBufferAuto": "Automatisk (rekommenderas)",
+  "networkBufferAutoHint": "Anpassas för varje video efter dess bithastighet och enhetens minne.",
+  "devQoeLog": "QoE-logg",
+  "devQoeLogSubtitle": "Skriver uppspelningstider till appens logg",
+  "playerGoLive": "Gå till live",
+  "playerBehindLive": "{time} efter live"
 }

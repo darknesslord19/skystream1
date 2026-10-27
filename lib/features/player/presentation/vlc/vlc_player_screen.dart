@@ -1,9 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data' show BytesBuilder, Uint8List;
 
+import 'package:clock/clock.dart';
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:dio/dio.dart' show Options, ResponseType;
+import 'package:dio/dio.dart'
+    show CancelToken, Options, ResponseBody, ResponseType;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,21 +22,30 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/network/clearance/clearance.dart';
 import '../../../../core/network/dio_client_provider.dart';
 import '../../../../core/network/http_defaults.dart';
+import '../../../../core/network/link_probe_service.dart' show hlsVariantsOf;
 import '../../../../core/providers/device_info_provider.dart';
+import '../../../../core/providers/device_memory.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../../core/extensions/providers.dart';
+import '../../../../core/models/tmdb_details.dart';
 import '../../../../core/models/torrent_status.dart';
 import '../../../../core/services/download_service.dart';
 import '../../../../core/services/local_proxy_service.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/utils/app_utils.dart';
+import '../../../../core/utils/file_size_formatter.dart';
+import '../../../../core/utils/stream_quality_sorter.dart'
+    show qualityPreferenceHeight;
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/check_line.dart';
 import '../../domain/episode_navigator.dart';
 import '../../../skip/data/skip_service.dart';
 import '../../domain/clear_key.dart';
 import '../../domain/hls_video_length.dart';
+import '../../domain/hls_quality.dart' show qualityLadderOf;
+import '../../domain/live_window.dart';
+import '../../domain/media_options.dart';
 import '../../domain/playback_progress.dart';
 import '../../domain/buffered_ahead.dart';
 import '../../../../core/logger/app_logger.dart';
@@ -40,6 +53,9 @@ import '../../domain/network_buffer.dart';
 import '../../domain/smoothness.dart';
 import '../../domain/track_memory.dart';
 import '../../domain/playback_recovery.dart';
+import '../../domain/qoe_log.dart';
+import '../../domain/recovery_policy.dart';
+import '../../domain/source_check.dart';
 import '../../domain/side_car_subtitles.dart';
 import '../../domain/skip_segments.dart';
 import '../../domain/source_row_status.dart';
@@ -58,11 +74,11 @@ import 'next_episode_countdown.dart';
 import 'player_startup_view.dart';
 import 'panel/player_panel.dart';
 import 'panel/player_panel_labels.dart' show sourceFactsOf;
-import 'panel/player_tracks_tab.dart' show reseatAfterTrackSwitch;
 import 'player_value_selector.dart';
 import 'resume_hint.dart';
 import 'side_car_fetch.dart';
 import 'side_car_subtitle_view.dart';
+import 'source_check_provider.dart';
 import 'torrent_file_sheet.dart';
 import 'vlc_player_controls.dart';
 
@@ -116,33 +132,6 @@ enum _Advance {
   declined,
 }
 
-/// libVLC's output latency, in milliseconds (`--network-caching`), and the one
-/// number that decides how long a newly selected audio or subtitle track stays
-/// silent: a stream started mid-playback has to fill this buffer before it
-/// emits, while the picture, already full, carries on. Live uses the same
-/// value, so the two cannot drift apart.
-const int kNetworkCachingMs = 3000;
-
-/// How many times one source is re-opened before moving to the next. Only
-/// applies to a source that actually produced frames — one that never played is
-/// simply dead and gets no retries.
-const int _kSameSourceRetries = 2;
-
-/// How many times a live feed is reopened before giving up on that source.
-/// Reset as soon as playback actually resumes, so an all-evening channel that
-/// drops once an hour never exhausts it.
-const int _kMaxLiveReconnects = 5;
-
-/// Breathing room before reopening a dropped live feed. Without it a dead URL
-/// ends instantly and the reopen becomes a hot loop.
-const Duration _kLiveReconnectDelay = Duration(seconds: 2);
-
-/// How long an attempt must run before its recovery budgets are handed back.
-///
-/// Not the first frame: a source that plays three seconds after every reopen
-/// would otherwise refill its own retry budget forever and never fail over.
-const Duration _kHealthyPlayback = Duration(seconds: 30);
-
 /// How often the stall watchdog looks. One second is far finer than any of its
 /// thresholds and costs nothing — the check is arithmetic on two counters.
 const Duration _kWatchdogTick = Duration(seconds: 1);
@@ -186,6 +175,12 @@ const Duration _kLengthSlack = Duration(seconds: 1);
 
 /// How long measuring an HLS stream may wait on one playlist.
 const Duration _kPlaylistTimeout = Duration(seconds: 8);
+
+/// How much of an answer is read before deciding whether it is a playlist at
+/// all, and the most of one that is read: a three-hour media playlist is
+/// under 2 MB.
+const int _kPlaylistHeadBytes = 64;
+const int _kPlaylistMaxBytes = 4 << 20;
 
 class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     with WidgetsBindingObserver, WindowListener {
@@ -248,7 +243,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
   /// Why the last source was given up on, shown under the source line while
   /// the next one opens. Its own field rather than a write to [_status]:
-  /// [_failAttempt] and the [_openAttempt] it calls run in one synchronous
+  /// [_run] and the [_openAttempt] it calls run in one synchronous
   /// stretch, so the status line is overwritten before a frame is drawn.
   /// Cleared by the first frame.
   String? _failReason;
@@ -272,6 +267,32 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// short clip is below the resumable threshold, so neither produces a sample
   /// despite playing.
   bool _sawFrames = false;
+
+  /// Whether a same-source reopen is showing the last picture of the attempt
+  /// before it (spec 2, *The reopen*: "the picture stays").
+  ///
+  /// Apart from [_sawFrames] on purpose. That one says this attempt has
+  /// played, and the first-frame watch and the stall watchdog depend on it:
+  /// kept true through a reopen, an open that never starts would never be
+  /// given up on, and the nudge would seek a media still opening. What the
+  /// screen shows asks [_pictureUp].
+  bool _keptPicture = false;
+
+  /// Whether a picture is on screen: this attempt's own, or one kept from the
+  /// attempt before.
+  bool get _pictureUp => _sawFrames || _keptPicture;
+
+  /// Whether the media this attempt opened is HLS or DASH, which libVLC's
+  /// adaptive module plays: no stall nudge, no rendition step-down for
+  /// anything else.
+  bool _adaptive = false;
+
+  /// The VlcPlayer's key: moving it on mounts a new one, which makes a new
+  /// native player. See [_checkFirstFrame].
+  int _playerMount = 0;
+
+  /// The attempt whose media has already been given a new VlcPlayer, once.
+  int? _remountedFor;
 
   /// Whether the engine has been handed this attempt's media yet.
   ///
@@ -386,7 +407,41 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// failover that completes late cannot overwrite a newer one.
   int _generation = 0;
   int _attemptIndex = 0;
-  int _attemptRetries = 0;
+
+  /// What recovery does next (spec 2, *What happens next*): the checks, the
+  /// back-off, the waits, the budgets, the walk and the session cap. Told
+  /// every resolve's candidates, every open, picture and move, and every
+  /// failure with its sign.
+  late final RecoveryPolicy _policy = RecoveryPolicy(
+    resuming: () => _reopenTarget() > Duration.zero,
+  );
+
+  /// The one timer recovery asks for, at its next due time.
+  Timer? _recoveryTimer;
+
+  /// Moves on with every open and resolve, so a check's answer for one that
+  /// has gone is dropped.
+  int _checkGeneration = 0;
+
+  /// Whether the failed source is parked over its picture: the same media
+  /// set again, held, not told to play (plan note 1). Until the next open.
+  bool _parked = false;
+
+  /// Lets the display sleep at the end of a long wait; see
+  /// [_keepAwakeThroughWait].
+  Timer? _waitAwake;
+
+  /// Whether this attempt opened paused, and waits for the viewer's play
+  /// before it has anything to be late for.
+  bool _awaitingPlay = false;
+
+  /// The controller's pause requests when the last failure came in: a pause
+  /// since then is the viewer's, and the reopen opens paused (decision 15).
+  int _pauseRequestsAtFailure = 0;
+
+  /// What the last failure said, for the start-up view's line when the
+  /// reopen after it can't keep the picture.
+  String _lastFailureDetail = '';
 
   /// Whether [SubtitleDefault.off] still applies to the media this attempt
   /// opened. Read the whole rule on [_applySubtitleDefault]; false for the
@@ -400,49 +455,145 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// second at an engine that is ignoring it.
   int? _subtitleOffAsked;
 
-  /// Candidates opened during the current failover walk, so the walk can wrap
-  /// past the end of the list without becoming a loop. Cleared once a source
-  /// has played for [_kHealthyPlayback] — see [_onProgress].
-  final Set<int> _tried = <int>{};
-
-  /// Set while a hand-picked source is on trial, holding the session it
-  /// interrupted. A pick that will not open must cost the viewer nothing, so
-  /// its failure restores this instead of walking the failover ladder.
-  ({int index, Duration position})? _revertTo;
-
   /// Whether the current attempt is a torrent, which is allowed far longer to
   /// produce its first frame — it is waiting on pieces, not on a socket.
   bool _attemptIsTorrent = false;
 
-  /// How long the current attempt has been running, and how long since the
-  /// position last moved. Together they are the watchdog's whole input.
-  ///
-  /// Counted by the watchdog's own tick rather than off the wall clock: a
-  /// clock correction mid-play - NTP, a television leaving standby - would
-  /// otherwise read as a stall and fail a healthy source over.
-  Duration _attemptAge = Duration.zero;
-  Duration _stalledFor = Duration.zero;
+  /// When the current attempt's clocks started, and how long the position
+  /// has stood still: the watchdog's whole input, on the wall clock (spec 2:
+  /// "It counts wall-clock time, not ticks"). A minute the device slept
+  /// counts as a minute, so a connection that died while a laptop slept is
+  /// caught as it wakes; a clock correction while playback moves counts as
+  /// nothing ([StallClock]).
+  DateTime _attemptStartedAt = clock.now();
+  final StallClock _stallClock = StallClock();
+
+  /// How long the current attempt has been running, on the wall clock.
+  Duration get _attemptAge => clock.now().difference(_attemptStartedAt);
+
+  /// How long the position has stood still.
+  Duration get _stalledFor => _stallClock.stalledFor;
+
+  /// Set when the stall count starts again, until the next tick: that tick
+  /// belongs to the video-health watchdog, as one where the position moved
+  /// does.
+  bool _stallRestarted = false;
+
+  /// How long the current attempt has played, counted by the watchdog's tick
+  /// while playback is expected: the buffered-ahead estimator's time base.
+  /// Its rates are bytes per second of playback, and the minutes a pause
+  /// adds to the wall clock would read as a skip.
+  Duration _playingAge = Duration.zero;
+
+  /// Watches for a picture frozen while the sound plays on (plan note 5).
+  final StarvedVideoWatch _starved = StarvedVideoWatch();
+
+  /// The current attempt's first-frame watch, from the open until its first
+  /// picture (plan note 6), and the attempt it watches.
+  FirstFrameWatch? _firstFrame;
+  int _firstFrameGeneration = -1;
+
+  /// Set while a sample for [_firstFrame] is in flight.
+  bool _firstFrameSampling = false;
+
+  /// Whether this attempt's media has run - playing or buffering - since it
+  /// opened: a pause or a stop nobody asked for is an edge from running, never
+  /// a state an open starts in.
+  bool _ranSinceOpen = false;
+
+  /// The controller's pause requests when playback last ran: a pause or a
+  /// stop since with none asked for is a failure (spec 2, Detection).
+  int _pauseRequestsWhenRunning = 0;
+
+  /// Set once this attempt's stop nobody asked for has been reported.
+  bool _stopReported = false;
 
   /// The highest watchdog rung already fired for the current stall, so each
   /// fires once. Cleared the moment the position moves.
   StallAction _lastStallAction = StallAction.none;
   Timer? _watchdog;
 
-  /// The current attempt's [kFirstFrameDeadline], armed as it starts opening
-  /// and gone with its first picture. See [_armFirstFrameDeadline].
-  Timer? _firstFrameDeadline;
+  /// This screen's QoE record: what each attempt did and when. See [QoeLog].
+  late final QoeLog _qoe;
 
-  /// The tallest adaptive rendition this session may be handed.
+  /// Samples resident memory into [_qoe] every 10 s.
+  Timer? _qoeMemory;
+
+  /// What [_qoeObserve] and [_qoeSeekChanged] last saw, so they record edges
+  /// rather than levels.
+  bool _qoeStalled = false;
+  bool _qoeTracksKnown = false;
+  int? _qoeAudio;
+  int? _qoeSubtitle;
+  Duration? _qoeSeekTarget;
+  int _qoeSeekRequests = 0;
+  int? _qoeIndex;
+
+  /// The tallest adaptive rendition this device may be handed.
   ///
   /// Seeded in [initState] — see [adaptiveMaxHeightFor] — and lowered a rung
-  /// at a time when the decoder proves it cannot keep up. The seeded value
-  /// goes on the instance config; a lowered one is carried per-media, because
-  /// the instance's options are fixed at construction.
+  /// at a time when the decoder proves it cannot keep up under Auto. What a
+  /// source opens with is [_renditionCap], which this bounds.
   late int _adaptiveMaxHeight;
 
-  /// The seeded cap, kept so a step-down can be recognised as one. Media
-  /// options stay untouched while the two agree.
+  /// The seeded cap. It goes on the instance config, whose options are fixed
+  /// at construction, so a cap that differs from it rides on the media.
   late final int _deviceAdaptiveMaxHeight;
+
+  /// Whether this screen decodes in software since MediaCodec stopped
+  /// producing pictures ([_retryInSoftware]). For the screen's life.
+  bool _softwareRetry = false;
+
+  /// The cap the media now playing was opened with - see [renditionCapFor]:
+  /// the smaller of [_adaptiveMaxHeight] and the quality preference. What a
+  /// step-down lowers from.
+  late int _renditionCap;
+
+  /// The quality preference's height when the media now playing was opened,
+  /// or null for Any: Auto's cap until the next open reads the preference
+  /// again.
+  int? _preferenceHeightAtOpen;
+
+  /// The read-ahead the open in progress asked for (spec 1.2): what the
+  /// buffered band measures against.
+  BufferPlan? _bufferPlan;
+
+  /// The live HLS playlist this attempt opened, until its target duration is
+  /// read ([_maybeReadLiveSegment]).
+  ({Uri uri, Map<String, String> headers})? _liveMedia;
+
+  /// A live HLS stream's target duration, which sets the stretch of its window
+  /// the controls offer; null until read, and the window assumes 10 s.
+  Duration? _liveSegment;
+
+  /// A seek in a live window on its way ([_seekInLiveWindow]): the place in
+  /// the stream's own timeline it means, how far behind live that is, and
+  /// whether it was LIVE's.
+  ({Duration target, Duration behind, Duration segment, bool toLive})?
+  _liveSeek;
+
+  /// The live delay the next open asks for, once, instead of
+  /// [kLiveDelayMs]: a window seek libVLC didn't take reopens that far back.
+  int? _nextLiveDelayMs;
+
+  /// The quality the viewer picked in the Quality tab, as the cap it asks
+  /// for, or null for Auto. Holds for the rest of this player session -
+  /// failovers and the next episodes open under it too - and a step-down
+  /// lowers it as it lowers Auto's.
+  int? _qualityPick;
+
+  /// The heights the HLS stream playing offers, tallest first, for the
+  /// Quality tab; empty for anything else. See [_maybeReadQualityLadder].
+  List<int> _qualityLadder = const <int>[];
+
+  /// The source (its URL, before any proxy) [_qualityLadder] was read from
+  /// or is being read from; null when none is.
+  String? _qualityLadderOf;
+
+  /// What this attempt's ladder would be read from: the address libVLC was
+  /// given, its headers, and the source they open. Per attempt; null for
+  /// media that is not HLS.
+  ({Uri uri, Map<String, String> headers, String source})? _qualityMedia;
 
   /// The decoder counters when the current measurement window opened, and how
   /// much of the window has been covered so far.
@@ -474,6 +625,17 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   Duration? _lastSeekAt;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
 
+  /// Whether the network is metered: asked once as the screen opens, then
+  /// kept current by connectivity events (spec 1.8), so an open reads a kept
+  /// answer instead of asking the platform again.
+  late Future<bool> _metered;
+
+  /// The device's memory, read at the screen's start and again after each
+  /// plan, for the next open: a read is a platform call, up to 0.14 s on the
+  /// phone emulator, and no open should wait on one (spec 1.2: every open
+  /// reads; it uses the reading taken since the last).
+  late Future<DeviceMemory> _memory;
+
   /// Whether the app is on screen. A backgrounded player freezes its position
   /// legitimately, and recovering from that would reopen sources nobody is
   /// watching.
@@ -499,9 +661,6 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Decided from the item and URL at open time rather than from the engine,
   /// because it governs buffering and what end-of-media means.
   bool _isLive = false;
-
-  /// Consecutive live reopen attempts that have not yet produced playback.
-  int _liveReconnects = 0;
 
   /// A livestream has no position worth sampling, so it is written to history
   /// once per session rather than on every tick.
@@ -641,6 +800,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Whether this attempt's video has been measured yet, and what it came to.
   bool _videoLengthAsked = false;
   Duration? _videoLength;
+
+  /// This attempt's read of the playlist libVLC was given: asked for once,
+  /// and shared by the length check and the Quality tab's ladder. Per attempt.
+  ({Uri uri, Future<String?> playlist})? _openedPlaylist;
 
   /// Desktop window state, mirrored so the button icon can follow it.
   ///
@@ -828,6 +991,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   @override
   void initState() {
     super.initState();
+    // First, so the record starts with the screen and the device suite reads
+    // this screen's log.
+    _qoe = QoeLog(sink: (line) => talker.info(line));
     _episode = widget.episode;
     _videoUrl = widget.videoUrl;
     _preloaded = widget.preloadedStreams;
@@ -886,12 +1052,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         preference: settings.hardwareDecoding,
       ),
     );
+    _renditionCap = _adaptiveMaxHeight;
 
-    // The same buffer to the other engine. Here rather than at torrent setup
-    // because this is the one place that has the settings and the device tier
-    // in hand, and the server may be started later by a source resolver that
-    // has neither.
-    _applyTorrentBuffer();
     _controller = VlcPlayerController(
       autoPlay: true,
       // Native events are not throttled by default and position ticks are not
@@ -900,55 +1062,27 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       eventThrottleInterval: const Duration(milliseconds: 250),
       config: VlcPlayerConfig(
         network: VlcNetworkConfig(
-          // --network-caching is output latency, not read-ahead: every
-          // elementary stream has to accumulate this much before it emits
-          // anything. That cost is invisible at startup, where all the streams
-          // fill together, and very visible afterwards - selecting a different
-          // audio or subtitle track starts a stream from empty, so the picture
-          // carries on while the new track stays silent for exactly one
-          // caching interval. Measured at 60s when this carried a buffer
-          // depth in minutes; a seek masked it, because a seek refills every
-          // stream at once.
-          //
-          // So it is pinned to the same interval a live source uses. libVLC 3
-          // has no read-ahead-in-seconds control for this to stand in for, and
-          // a large value here buys nothing but the silence above.
-          networkCaching: kNetworkCachingMs,
-          // Read-ahead, which is the knob the caching one was mistaken for:
-          // it buys resilience and cheap seeks without delaying a stream that
-          // starts mid-playback. KiB is libVLC's unit.
-          prefetchBufferKiB: _bufferMb * 1024,
+          // For anything that reaches libVLC without media options. Each
+          // media carries its own interval, and its read-ahead from the
+          // buffer rule: see playbackMediaOptions.
+          networkCaching: kVodCachingMs,
           userAgent: kDefaultBrowserUserAgent,
-          // libVLC does adapt, but its estimator starts pessimistic and can
-          // sit on a low rendition for a long stretch, so pin the highest.
-          // Highest with no ceiling hands a weak device the 4K rung of every
-          // HLS stream, so the ceiling below is the other half of the choice.
-          adaptiveLogic: VlcAdaptiveLogic.highest,
+          // HLS and DASH Auto follow the link: the highest rendition allowed
+          // for three segments, then down as the buffer drains and up as it
+          // fills. A Quality pick swaps in `highest` for its media. The
+          // ceiling keeps a weak device off renditions it can't decode
+          // either way.
+          adaptiveLogic: VlcAdaptiveLogic.predictive,
           adaptiveMaxHeight: _adaptiveMaxHeight,
         ),
         subtitleStyle: subtitleStyleFrom(settings),
         // Off by default; see [PlayerDiagnostics].
         verbose: PlayerDiagnostics.verboseVlcLog,
-        // The user's hardware-decoding preference, which reaches a decoder on
-        // Android only: every other platform renders through libVLC's vmem
-        // callbacks, and libvlc_video_set_callbacks sets `avcodec-hw = "none"`
-        // on the media player itself (VLC 3.0.21 lib/media_player.c:1113),
-        // below the instance in the variable-inheritance chain.
-        //
-        // Windows and Linux have no hardware decoder outside avcodec, so they
-        // are software-decode-only either way. Darwin decodes on VideoToolbox,
-        // which `avcodec-hw` has no authority over, so it keeps its hardware
-        // path either way. See VlcDecodingConfig.hardwareAcceleration.
-        decoding: VlcDecodingConfig(
-          hardwareAcceleration: settings.hardwareDecoding
-              ? VlcHardwareAcceleration.automatic
-              : VlcHardwareAcceleration.disabled,
-        ),
       ),
-      // Present in both shipped libVLC builds (VLCKit 3.7.3 and libvlc-all
-      // 3.7.0); see FORK.md section 8 on checking option names against the
-      // binary.
-      options: const <String>['--http-reconnect'],
+      // Android's audio output and the desktops' frame conversion; the
+      // hardware-decoding switch reaches Android's decoder per media (see
+      // softwareDecodeFor).
+      options: playerInstanceOptions(defaultTargetPlatform),
     );
     // The style above is fixed with the player. What libVLC can change while
     // it plays follows the settings from here, starting now - the lift has no
@@ -967,8 +1101,29 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _chrome = ChromeVisibilityController(
       isPlaying: () => _controller.value.isPlaying,
     );
-    _watchdog = Timer.periodic(_kWatchdogTick, (_) => _checkStall());
-    _listenForNetworkRestore();
+    _watchdog = Timer.periodic(_kWatchdogTick, (_) {
+      _checkFirstFrame();
+      _checkStall();
+    });
+    _controller.pendingSeekTarget.addListener(_qoeSeekChanged);
+    _controller.pendingSeekTarget.addListener(_onSeekSettled);
+    _controller.pendingSeekTarget.addListener(_followSeekTarget);
+    _qoeMemory = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _qoe.memory(ProcessInfo.currentRss ~/ (1 << 20)),
+    );
+    // Asked alongside the links rather than at each open: on a cold Android
+    // emulator the platform took 1.3 s to answer.
+    // One question for both: whether the network is metered, for the buffer
+    // rule, and whether there is one at all, for recovery. Metered on any
+    // error, the answer that can't spend data the viewer didn't agree to.
+    final network = Connectivity().checkConnectivity();
+    _metered = network.then(
+      (results) => results.contains(ConnectivityResult.mobile),
+      onError: (Object _) => true,
+    );
+    _memory = readDeviceMemory();
+    _listenForConnectivity(network);
     _attachPip();
     unawaited(_start());
   }
@@ -1046,12 +1201,36 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   void _seekRelative(Duration delta) {
     final value = _controller.value;
     if (!value.isSeekable) return;
-    var target = value.position + delta;
+    // Over a held picture the engine reports the new media's 0: a press
+    // steps from where the reopen is going.
+    var target =
+        (value.isPictureHeld
+            ? _controller.pendingSeekTarget.value ?? value.position
+            : value.position) +
+        delta;
     if (target < Duration.zero) target = Duration.zero;
     if (value.duration > Duration.zero && target > value.duration) {
       target = value.duration;
     }
     unawaited(_controller.seekTo(target));
+  }
+
+  /// Where a reopen starts (spec 2, *The reopen*: "`pendingSeekTarget ?? last
+  /// position`"): where playback is going - a seek on its way, or a held
+  /// reopen's own start - or else where it last was. A live stream reopens at
+  /// its live start; [_isLive] is the item's and the address's word, which a
+  /// live window's length and seekability don't change.
+  Duration _reopenTarget() => _isLive
+      ? Duration.zero
+      : _controller.pendingSeekTarget.value ?? _resumePosition;
+
+  /// Keeps [_resumePosition] on every seek target as it is set: the
+  /// controller drops a target the moment its media can no longer land - an
+  /// error, an end - and recovery asks where to reopen after that.
+  void _followSeekTarget() {
+    final target = _controller.pendingSeekTarget.value;
+    if (target == null || _isLive) return;
+    _resumePosition = target;
   }
 
   /// Resolve the candidate list, then open the best one.
@@ -1122,6 +1301,21 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       );
       if (_disposed) return;
       _resolved = resolved;
+      // A new resolve: recovery learns the candidates, and what the race
+      // found about them.
+      _checkGeneration += 1;
+      _policy.candidatesChanged([
+        for (final stream in resolved.streams)
+          RecoveryCandidate(
+            authority: Uri.tryParse(stream.url)?.authority ?? '',
+            checkable: !isUncheckableSource(stream),
+          ),
+      ]);
+      for (final entry in _probes.entries) {
+        if (entry.value != ProbeOutcome.trying) {
+          _policy.probed(entry.key, entry.value);
+        }
+      }
       _publishPanelData();
       // The race is over. A pick from here on is held for the first open -
       // see [_pickSource].
@@ -1160,14 +1354,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       // starts from wherever playback actually got to.
       _resumePosition = _initialResume?.position ?? Duration.zero;
       // Per session. The hint belongs to the resume point resolved just above
-      // and the reconnect budget to the media about to be opened; carrying
-      // either forward offers a stale position or refuses to reconnect a feed
-      // that has not dropped.
+      // and recovery's budgets to the media about to be opened, which
+      // `candidatesChanged` started again; carrying either forward offers a
+      // stale position or refuses to reconnect a feed that has not dropped.
       _resumeHintOffered = false;
       _showResumeHint = false;
-      _liveReconnects = 0;
-      _revertTo = null;
-      _tried.clear();
 
       // Not awaited: both skip sources are network lookups against
       // crowdsourced databases, and playback must not wait on a convenience.
@@ -1221,6 +1412,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _probes.clear();
     _failedRows.clear();
     _playedRows.clear();
+    _qualityLadder = const <int>[];
+    _qualityLadderOf = null;
   }
 
   /// The candidate list, the moment resolution has one.
@@ -1246,6 +1439,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (_disposed || !mounted || generation != _resolveGeneration) return;
     setState(() {
       _probes[index] = outcome;
+      if (outcome != ProbeOutcome.trying) _policy.probed(index, outcome);
       _publishPanelData();
     });
   }
@@ -1255,10 +1449,22 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// The generation counter is bumped first and re-checked after every await.
   /// Without it a failover triggered by a dying source can land after the user
   /// has already moved on, and hand the engine media nobody asked for.
+  ///
+  /// [keepPicture] keeps the picture on screen through a same-source reopen,
+  /// when one is up and the output can hold it (spec 2, *The reopen*), with
+  /// [status] as the line over it; every other open puts the start-up view
+  /// up, naming the source. [autoPlay] false opens it paused.
+  ///
+  /// [revertTo] is the source a trial pick interrupted: recovery goes back to
+  /// it if the pick won't play.
   Future<void> _openAttempt(
     int index, {
     required Duration startAt,
-    int retries = 0,
+    int? revertTo,
+    String reason = 'first',
+    bool keepPicture = false,
+    bool autoPlay = true,
+    String status = '',
   }) async {
     final resolved = _resolved;
     if (resolved == null || _disposed) return;
@@ -1323,6 +1529,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // a hand-picked source - and none of them may leave the ended card up over
     // media that is opening.
     _ended = null;
+    // The Quality tab's ladder is one source's. Another source's open takes
+    // it down until that one's own is read; a reopen of this one - a pick, a
+    // step-down, a recovery - keeps it, and a read still out for it lands.
+    if (resolved.streams[index].url != _qualityLadderOf) {
+      _qualityLadderOf = null;
+      _qualityLadder = const <int>[];
+    }
     // A rebuild of its own: the startup view's highlighted row, source line
     // and "Source n of m" all follow this, and nothing else in an open is
     // guaranteed to change the screen - a failover from a source that never
@@ -1336,8 +1549,21 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Published here, not only at open: this is the write the panel's
     // 'Now playing' tick follows through a failover or a trial revert.
     _publishPanelData();
-    _attemptRetries = retries;
-    _tried.add(index);
+    // Recovery's attempt: the open ends any recovery under way, and replaces
+    // any park.
+    _parked = false;
+    _awaitingPlay = !autoPlay;
+    // Every open keeps the display on until playback decides - Retry's and a
+    // pick from the failed screen's too - except one opened paused, which
+    // sleeps as a pause does.
+    unawaited(autoPlay ? WakelockPlus.enable() : WakelockPlus.disable());
+    _checkGeneration += 1;
+    _policy.opened(
+      source: index,
+      live: isLiveSource(widget.item, resolved.streams[index].url),
+      revertTo: revertTo,
+    );
+    _armRecoveryTimer();
 
     // The outgoing attempt's last position goes to history before it is
     // forgotten: the sample is cleared on the next line.
@@ -1348,6 +1574,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // by the last one answers for the wrong one.
     _sample = null;
     _handedToEngine = false;
+    // The picture stays through a same-source reopen that asks for it, when
+    // one is up; set before the frame flag goes, so the lock - which belongs
+    // to the picture - stays with it.
+    final keep = keepPicture && _pictureUp;
+    _setKeptPicture(keep);
     _setSawFrames(false);
     // Seeded with the start position rather than zero: the first value after
     // setMedia still carries the previous media's numbers, and treating that
@@ -1355,16 +1586,28 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _lastSeenPosition = startAt;
     _lastSeenDuration = Duration.zero;
     _hlsMedia = null;
+    _qualityMedia = null;
+    _liveMedia = null;
+    // A seek in the last media's live window ends with it: this open's
+    // setMedia clears the controller's target, which [_onSeekSettled] would
+    // otherwise take for a seek libVLC never took, and reopen at its distance.
+    _liveSeek = null;
     _videoLengthAsked = false;
     _videoLength = null;
+    _openedPlaylist = null;
     _startAttemptClock();
 
     final stream = resolved.streams[index];
+    _qoeOpened(index, stream, startAt, reason, keptPicture: keep);
 
-    _armFirstFrameDeadline(
-      generation,
-      torrent: isTorrentSource(stream) || _torrentFileIndex != null,
-    );
+    // An open told not to play has nothing to be late for until the viewer
+    // plays it.
+    if (autoPlay) {
+      _watchFirstFrame(
+        generation,
+        torrent: isTorrentSource(stream) || _torrentFileIndex != null,
+      );
+    }
 
     // The race only checked the top few. A source opened from past them -
     // picked by the viewer, or reached by failover - is checked now, while it
@@ -1376,8 +1619,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Which candidate is being tried is the startup view's to say - its pill,
     // its source line and its highlighted row all follow [_attemptIndex]. What
     // is left for the status line is anything unusual about this open, and a
-    // line left over from the last one is not that.
-    _setStatus('');
+    // line left over from the last one is not that. Over a kept picture it is
+    // the pill, saying why the picture stands still: "Reconnecting…" after a
+    // failure, nothing for a reopen the viewer or the screen chose.
+    _setStatus(keep ? status : '');
 
     // libVLC cannot decrypt CENC on any build we ship, so ClearKey content is
     // decrypted in the local proxy and handed to the engine as plaintext.
@@ -1396,9 +1641,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       final obstacle = drmObstacleFor(stream);
       if (obstacle != null) {
         final l10n = _l10n;
-        return _failAttempt(
+        return _onFailure(
+          FailureSign.unplayable,
           l10n == null ? 'DRM' : describeDrmObstacle(l10n, obstacle),
-          allowSameSourceRetry: false,
         );
       }
     }
@@ -1411,15 +1656,44 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // server, so isTorrentSource no longer sees it - but it still needs the
     // patient stall deadline while the piece cache fills.
     _attemptIsTorrent = isTorrent || _torrentFileIndex != null;
-    if (isTorrent) _setStatus(_l10n?.playerPreparingTorrent ?? '');
+    if (isTorrent) {
+      // Not the last torrent's numbers for up to three seconds.
+      _torrentStatus = null;
+      _setStatus(_l10n?.playerPreparingTorrent ?? '');
+    }
     if (isTorrent && _torrentPoll == null) {
       _startedTorrent = true;
       _startTorrentPolling();
     }
+    // A magnet's sizes reach the torrent server before it is added: its
+    // write happens at its start, before the first add, and drops every
+    // torrent it holds (spec 5). A pack file picked out of a loaded torrent
+    // hands over nothing.
+    BufferPlan? torrentPlan;
+    if (isTorrent) {
+      final metered = await _metered;
+      if (_disposed || generation != _generation) return;
+      final plan = await _planBuffer(
+        stream,
+        BufferMedia.torrent,
+        metered: metered,
+      );
+      if (_disposed || generation != _generation) return;
+      final cacheMb = plan.torrentCacheMb!;
+      _read(torrentServiceProvider).bufferForNextStart(
+        cacheMb: cacheMb,
+        readAheadPercent: torrentReadAheadPercent(cacheMb),
+      );
+      torrentPlan = plan;
+    }
     final playable = await playableUrlFor(read: _read, stream: stream);
     if (_disposed || generation != _generation) return;
+    if (isTorrent) {
+      _qoe.torrent(_read(torrentServiceProvider).takeStartSettings()?.toJson());
+    }
     if (playable == null) {
-      return _failAttempt(
+      return _onFailure(
+        FailureSign.unplayable,
         _l10n?.playerReasonTorrentNotPrepared ??
             'torrent could not be prepared',
       );
@@ -1427,7 +1701,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
     final uri = _playableUri(playable);
     if (uri == null) {
-      return _failAttempt(
+      return _onFailure(
+        FailureSign.unplayable,
         _l10n?.playerReasonNoPlayableAddress ??
             'source has no playable address',
       );
@@ -1438,35 +1713,87 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         ? await _decryptingUri(uri, headers, clearKey)
         : await _deliverableUri(uri, headers);
     if (_disposed || generation != _generation) return;
+    _adaptive =
+        looksLikeHls(mediaUri) || mediaUri.path.toLowerCase().endsWith('.mpd');
 
+    // Auto's cap follows the quality preference in force now - mobile data's
+    // on a metered link, Wi-Fi's otherwise, as source sorting decides it -
+    // read at each open: a viewer who leaves Wi-Fi keeps what plays until
+    // something opens the media again. A pick from the Quality tab
+    // overrides it.
+    final metered = await _metered;
+    if (_disposed || generation != _generation) return;
+    final settingsNow =
+        _read(playerSettingsProvider).asData?.value ?? const PlayerSettings();
+    final preference = metered
+        ? settingsNow.mobileQuality
+        : settingsNow.wifiQuality;
+    _preferenceHeightAtOpen = qualityPreferenceHeight(preference);
+    _renditionCap = renditionCapFor(
+      deviceCap: _adaptiveMaxHeight,
+      pick: _qualityPick,
+      preferenceHeight: _preferenceHeightAtOpen,
+    );
+
+    // A segment length read from another source's playlist says nothing
+    // about this one's; a reopen of this one keeps it.
+    if (stream.url != _lastStreamUrl) _liveSegment = null;
     _lastStreamUrl = stream.url;
     _isLive = isLiveSource(widget.item, stream.url);
     final languageOption = _audioLanguageOption();
+    // How far ahead this media reads (spec 1.2): from its bitrate, the
+    // network, and the memory free now.
+    final plan =
+        torrentPlan ??
+        await _planBuffer(stream, _bufferMediaFor(mediaUri), metered: metered);
+    if (_disposed || generation != _generation) return;
+    _bufferPlan = plan;
+    final liveDelayMs =
+        _nextLiveDelayMs ?? PlayerDiagnostics.liveDelayMs ?? kLiveDelayMs;
+    _nextLiveDelayMs = null;
+    _qoe.engine();
     await _controller.setMedia(
       VlcMediaSource(
         uri: mediaUri,
         httpHeaders: headers,
         startPosition: startAt,
-        // A live input takes its latency from --live-caching, which the
-        // instance config does not carry, so the same interval VOD gets is
-        // named here for both.
-        //
-        // The rendition ceiling rides here only once it has been lowered from
-        // the seeded value, which is already on the instance config.
-        //
-        // The audio language rides here whenever the setting speaks for this
-        // media - see [_audioLanguageOption].
-        mediaOptions: <String>[
-          if (_isLive) ':live-caching=$kNetworkCachingMs',
-          if (_isLive) ':network-caching=$kNetworkCachingMs',
-          if (_adaptiveMaxHeight != _deviceAdaptiveMaxHeight)
-            ':adaptive-maxheight=$_adaptiveMaxHeight',
-          ?languageOption,
-        ],
+        // Each media carries its own start threshold, buffer and decoder
+        // choice: libvlc-android adds its own caching to a media that names
+        // none. The rendition cap rides here whenever it is not the one the
+        // player was created with: lowered by a step-down, a pick or the
+        // quality preference. The audio language rides here whenever the
+        // setting speaks for this media - see [_audioLanguageOption].
+        mediaOptions: playbackMediaOptions(
+          live: _isLive,
+          plan: plan,
+          renditionCap: _renditionCap != _deviceAdaptiveMaxHeight
+              ? _renditionCap
+              : null,
+          qualityPicked: _qualityPick != null,
+          softwareDecode:
+              _softwareRetry ||
+              softwareDecodeFor(
+                platform: defaultTargetPlatform,
+                hardwareDecoding:
+                    (_read(playerSettingsProvider).asData?.value ??
+                            const PlayerSettings())
+                        .hardwareDecoding,
+              ),
+          languageOption: languageOption,
+          liveDelayMs: liveDelayMs,
+        ),
+        // So the controller places a live HLS window itself: libVLC counts
+        // its time from the join, and its window from the playlist it last
+        // read.
+        isLive: _isLive,
       ),
-      autoPlay: true,
+      autoPlay: autoPlay,
+      keepPicture: keep,
     );
     if (_disposed || generation != _generation) return;
+    // An output that couldn't hold - one that can't, or nothing there to hold
+    // after all - shows the new media's opening: the start-up view covers it.
+    if (keep && !_controller.value.isPictureHeld) _setKeptPicture(false);
     // From here every tick is this attempt's. Restarted here as well as above:
     // everything between the two is setup — torrent preparation, a proxy
     // handshake — and the deadline the watchdog enforces is on the engine
@@ -1476,6 +1803,15 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _startAttemptClock();
     if (!_isLive && looksLikeHls(mediaUri)) {
       _hlsMedia = (uri: mediaUri, headers: headers);
+    }
+    if (_isLive && looksLikeHls(mediaUri)) {
+      _liveMedia = (uri: mediaUri, headers: headers);
+    }
+    // What the Quality tab's ladder is read from once this media shows a
+    // picture: the address libVLC was given, with its headers - an inline
+    // playlist too - live as well as on demand.
+    if (looksLikeHls(mediaUri) || stream.quality == 0) {
+      _qualityMedia = (uri: mediaUri, headers: headers, source: stream.url);
     }
 
     // The source's subtitle files are read and drawn by SkyStream rather than
@@ -1795,16 +2131,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     }
   }
 
-  /// Puts audio track [id] on, and plays it from where the picture is
-  /// ([reseatAfterTrackSwitch]) - unless it is on already, which needs
-  /// neither the switch nor the rebuffer. Throws the engine's refusal.
+  /// Puts audio track [id] on, unless it is on already. Only selects: libVLC
+  /// plays it one caching interval later, and nothing seeks (see the Tracks
+  /// tab's `_setTrack`). Throws the engine's refusal.
   Future<void> _switchAudio(int id) async {
     _audioPutOn = id;
     if (id == _controller.value.activeAudioTrackId) return;
-    final generation = _generation;
     await _controller.setAudioTrack(id);
-    if (_disposed || generation != _generation) return;
-    await reseatAfterTrackSwitch(_controller);
   }
 
   /// The engine's audio tracks, each with the language it is in - which no
@@ -2126,105 +2459,273 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     }());
   }
 
-  /// The current candidate failed. Retry it, or move to the next one.
-  ///
-  /// Resumes from [_resumePosition] rather than from `controller.value`, which
-  /// `setMedia` has already zeroed by the time any retry runs — losing the
-  /// user's position is the one thing failover must never do.
-  ///
-  /// [jumpTo] names where to go instead of the next in line, when the caller
-  /// already knows a source that works.
-  void _failAttempt(
-    String reason, {
-    bool allowSameSourceRetry = true,
-    int? jumpTo,
-  }) {
+  /// The attempt failed, noticed by [sign] (spec 2, *Detection*), and
+  /// recovery decides what happens next. [detail] is today's message for it,
+  /// which the viewer sees if it comes to a failover or the failed screen.
+  void _onFailure(FailureSign sign, String detail) {
+    if (_disposed || _resolved == null) return;
+    final before = _policy.phase;
+    final step = _policy.failed(sign, detail: detail);
+    if (step is Carry && _policy.phase == before) {
+      // Nothing new to recover: the check while opening has nowhere proven
+      // to go, or this attempt's failure was already reported. A stalled
+      // player that then errors is one failure, and its second report must
+      // not move what the first one set, such as the viewer's pause.
+      return;
+    }
+    // Recovery has the attempt now: nothing is opening for the first-frame
+    // watch to judge.
+    _firstFrame = null;
+    final torrent = _torrentStatus;
+    _qoe.error(
+      detail,
+      sign: sign.name,
+      torrent: _attemptIsTorrent && torrent != null
+          ? <String, Object?>{
+              'peers': torrent.peers,
+              'totalPeers': torrent.totalPeers,
+              'loadedMb': torrent.loadedBytes ~/ (1 << 20),
+            }
+          : null,
+    );
+    _lastFailureDetail = detail;
+    _pauseRequestsAtFailure = _controller.pauseRequests;
+    // A source that failed is parked over its picture while recovery checks
+    // and waits (plan note 1): its player is dead, or for a starved video
+    // still playing sound the picture has lost. A stall keeps its player,
+    // which libVLC may yet ride out.
+    final recovering =
+        _policy.phase != RecoveryPhase.watching &&
+        _policy.phase != RecoveryPhase.gaveUp;
+    // The failure's not-playing edge let the display sleep (see
+    // [_syncPlayingState]), and recovery can wait minutes over the picture: a
+    // phone that slept through "Waiting for network…" came back to sound on a
+    // dark screen. The failed screen lets it sleep again ([_fail]).
+    if (recovering) unawaited(WakelockPlus.enable());
+    if (recovering && sign != FailureSign.stalled && _pictureUp) {
+      unawaited(_park(keepPicture: sign != FailureSign.noPicture));
+    }
+    _run(step);
+  }
+
+  /// Parks the failed source (plan note 1): the same media again, at where
+  /// the reopen will start, not told to play. libVLC opens no input until
+  /// play, so it costs nothing; the dead or stalled player is released at
+  /// once, off the platform thread; and one native hold keeps the picture
+  /// through the wait and the reopen. [keepPicture] is false for a picture
+  /// that went missing: there is none to keep, and the start-up view goes up
+  /// saying why, as it does wherever the output can't hold.
+  Future<void> _park({required bool keepPicture}) async {
+    final source = _controller.currentMediaSource;
+    final resolved = _resolved;
+    if (source == null || resolved == null || _parked) return;
+    _parked = true;
+    // Under the start-up view's source line, wherever the picture can't be
+    // kept; over a kept picture the pill says "Reconnecting…" instead.
+    _setFailReason(
+      '${sourceRowLabel(resolved.streams[_attemptIndex])} · '
+      '$_lastFailureDetail',
+    );
+    _setKeptPicture(keepPicture);
+    _setSawFrames(false);
+    // The failed player can still be sending reports - a starved video plays
+    // its sound on - and one already on its way, saying playing, would read as
+    // the viewer's play of the parked media: none counts until the park has
+    // handed the new media over, as an open's own setup does.
+    _handedToEngine = false;
+    try {
+      await _controller.setMedia(
+        VlcMediaSource(
+          uri: source.uri,
+          httpHeaders: source.httpHeaders,
+          mediaOptions: source.mediaOptions,
+          startPosition: _reopenTarget(),
+          isLive: source.isLive,
+        ),
+        keepPicture: keepPicture,
+      );
+    } on Object {
+      // A player that can't take media any more is the next open's problem.
+      if (!_disposed && _parked) _handedToEngine = true;
+      return;
+    }
+    if (_disposed || !_parked) return;
+    // Every backend has sent the parked media's opening snapshot by now, and
+    // dropped the failed player's: what follows is the parked media's.
+    _handedToEngine = true;
+    if (keepPicture && !_controller.value.isPictureHeld) {
+      _setKeptPicture(false);
+    }
+  }
+
+  /// Acts on what recovery asked for, then arms its next wake-up.
+  void _run(RecoveryStep step) {
     if (_disposed) return;
     final resolved = _resolved;
+    switch (step) {
+      case Carry():
+        break;
+      case RunCheck(:final source):
+        unawaited(_runCheck(source));
+      case ReopenSource(:final source, :final live, :final keepPicture):
+        _qoe.waitEnd();
+        if (!keepPicture && resolved != null) {
+          _setFailReason(
+            '${sourceRowLabel(resolved.streams[source])} · '
+            '$_lastFailureDetail',
+          );
+        }
+        unawaited(
+          _openAttempt(
+            source,
+            startAt: live ? Duration.zero : _reopenTarget(),
+            reason: live ? 'reconnect' : 'retry',
+            keepPicture: keepPicture,
+            // A viewer who paused while it recovered finds it paused.
+            autoPlay: _controller.pauseRequests == _pauseRequestsAtFailure,
+            status: _l10n?.playerReconnecting ?? '',
+          ),
+        );
+      case FailOverTo(:final source, :final detail, :final revert):
+        _qoe.waitEnd();
+        _failOverTo(source, detail, revert: revert);
+      case WaitHere(:final label):
+        _qoe.wait(
+          label: label.name,
+          positionMs: _reopenTarget().inMilliseconds,
+        );
+      case GiveUp(:final cause, :final detail):
+        _qoe
+          ..waitEnd()
+          ..gaveUp(cause: cause.name);
+        _giveUp(detail);
+    }
+    _syncRecoveryLabel();
+    _armRecoveryTimer();
+  }
+
+  /// Checks [source]'s server for recovery and tells it what came back.
+  Future<void> _runCheck(int source) async {
+    final resolved = _resolved;
+    if (resolved == null || source < 0 || source >= resolved.streams.length) {
+      return;
+    }
+    final generation = _checkGeneration;
+    CheckResult result;
+    try {
+      result = await _read(sourceCheckProvider)(resolved.streams[source]);
+    } on Object {
+      result = const CheckResult(
+        kind: CheckClass.network,
+        outcome: ProbeOutcome.unhealthy,
+        fault: NetworkFault.other,
+      );
+    }
+    if (_disposed || generation != _checkGeneration) return;
+    _qoe.check(
+      sourceIndex: source,
+      kind: result.kind.name,
+      status: result.status,
+      fault: result.fault?.name,
+      ms: result.elapsed.inMilliseconds,
+    );
+    _run(_policy.checked(source, result));
+  }
+
+  /// Moves to another source: the start-up view names it (spec 2: "The
+  /// start-up view appears only for a failover to another source, where it
+  /// shows which one").
+  void _failOverTo(int index, String detail, {required bool revert}) {
+    final resolved = _resolved;
     if (resolved == null) return;
-
-    final startAt = _controller.value.isLive ? Duration.zero : _resumePosition;
-
-    // A hand-picked source is on trial: the session it interrupted was fine,
-    // so going back to it beats burning the failover budget on a URL nobody
-    // was watching.
-    final revert = _revertTo;
-    if (revert != null) {
-      _revertTo = null;
-      _markFailed(_attemptIndex);
+    _markFailed(_attemptIndex);
+    if (revert) {
       _notify(
         _l10n?.playerSourceRestoredPrevious ??
             'That source would not play. Restored the previous one.',
       );
-      unawaited(_openAttempt(revert.index, startAt: revert.position));
-      return;
+    } else {
+      // Failover is otherwise silent: the engine is quietly handed a
+      // different URL behind a frame that has stopped moving. This says
+      // why, until the next source produces a frame - naming the source it
+      // is about, because the line above it names the next one.
+      _setFailReason(
+        '${sourceRowLabel(resolved.streams[_attemptIndex])} · $detail',
+      );
     }
-
-    // Failover is otherwise silent: the engine is quietly handed a different
-    // URL behind a frame that has stopped moving, which reads as a freeze.
-    // This says why, until the next source produces a frame - naming the
-    // source it is about, because the line above it names the next one.
-    _setFailReason(
-      '${sourceRowLabel(resolved.streams[_attemptIndex])} · $reason',
+    unawaited(
+      _openAttempt(
+        index,
+        startAt: _reopenTarget(),
+        reason: revert ? 'revert' : 'failover',
+      ),
     );
+  }
 
-    // A source that produced frames and then died is worth another try at the
-    // same URL; one that never played at all is simply dead.
-    // A failure the source cannot recover from - DRM we have no key for -
-    // opts out: re-opening the same URL would hit the same wall.
-    final hadFrames = _sawFrames;
-    if (allowSameSourceRetry &&
-        hadFrames &&
-        _attemptRetries < _kSameSourceRetries) {
-      unawaited(
-        _openAttempt(
-          _attemptIndex,
-          startAt: startAt,
-          retries: _attemptRetries + 1,
-        ),
-      );
+  /// Recovery gave up: the failed screen, which still offers Retry.
+  void _giveUp(String detail) {
+    final resolved = _resolved;
+    if (resolved == null) return;
+    _markFailed(_attemptIndex);
+    // Say what actually went wrong: a single-source channel refused for DRM
+    // should name the scheme rather than just count to one.
+    final total = resolved.streams.length;
+    _fail(
+      _l10n?.playerNoSourcesPlayableWithReason(total, detail) ??
+          (total == 1
+              ? detail
+              : 'None of the $total sources would play - $detail'),
+    );
+  }
+
+  /// Arms the one timer recovery asks for, at its next due time.
+  void _armRecoveryTimer() {
+    _keepAwakeThroughWait();
+    _recoveryTimer?.cancel();
+    _recoveryTimer = null;
+    final due = _policy.nextDue;
+    if (due == null || _disposed) return;
+    final wait = due.difference(clock.now());
+    _recoveryTimer = Timer(wait.isNegative ? Duration.zero : wait, () {
+      _recoveryTimer = null;
+      if (!_disposed) _run(_policy.due());
+    });
+  }
+
+  /// Lets the display sleep once a wait over the picture has lasted
+  /// [kWaitKeepsAwakeFor]: a played source whose server never answers waits
+  /// for ever (spec 2), and a phone left on "Reconnecting…" shouldn't stay lit
+  /// all night. Its next playing edge takes the lock again.
+  void _keepAwakeThroughWait() {
+    if (_policy.label == RecoveryLabel.none) {
+      _waitAwake?.cancel();
+      _waitAwake = null;
       return;
     }
-
-    _markFailed(_attemptIndex);
-    // [jumpTo] is a source already proven, which beats the next in line.
-    final next =
-        jumpTo ??
-        nextFailoverIndex(
-          from: _attemptIndex,
-          total: resolved.streams.length,
-          tried: _tried,
-          // Known dead before anything opened them, and a dead source that hangs
-          // rather than erroring costs the whole stall deadline. Walked last, not
-          // dropped: the probe is wrong about slow hosts.
-          unreachable: <int>{
-            for (final entry in _probes.entries)
-              if (entry.value == ProbeOutcome.unhealthy ||
-                  entry.value == ProbeOutcome.notVideo)
-                entry.key,
-          },
-          // Picking up where playback stopped: a source that cannot seek would
-          // start it again from the top.
-          cannotSeek: startAt > Duration.zero
-              ? <int>{
-                  for (final entry in _probes.entries)
-                    if (entry.value == ProbeOutcome.unseekable) entry.key,
-                }
-              : const <int>{},
-        );
-    if (next == null) {
-      // Say what actually went wrong: a single-source channel refused for DRM
-      // should name the scheme rather than just count to one.
-      final total = resolved.streams.length;
-      return _fail(
-        _l10n?.playerNoSourcesPlayableWithReason(total, reason) ??
-            (total == 1
-                ? reason
-                : 'None of the $total sources would play - $reason'),
-      );
-    }
-    unawaited(_openAttempt(next, startAt: startAt));
+    _waitAwake ??= Timer(kWaitKeepsAwakeFor, () {
+      if (_disposed || _policy.label == RecoveryLabel.none) return;
+      unawaited(WakelockPlus.disable());
+    });
   }
+
+  /// The pill over the picture, from recovery's label. Nothing when it has no
+  /// label: the open that follows a step sets its own line.
+  void _syncRecoveryLabel() {
+    final l10n = _l10n;
+    if (l10n == null) return;
+    switch (_policy.label) {
+      case RecoveryLabel.reconnecting:
+        _setStatus(l10n.playerReconnecting);
+      case RecoveryLabel.waitingForNetwork:
+        _setStatus(l10n.playerWaitingForNetwork);
+      case RecoveryLabel.none:
+        break;
+    }
+  }
+
+  /// The startup view's row pick, for tests that need one with no panel open.
+  @visibleForTesting
+  void debugPickSource(int index) => _pickSource(index, onTrial: false);
 
   /// Runs the reachability check for [stream], opened without having been
   /// checked.
@@ -2265,48 +2766,87 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// and asked anyway.
   void _abandonUnreachable(int attempt, int index) {
     if (_disposed || attempt != _generation || _attemptIndex != index) return;
-    if (_sawFrames) return;
-    final resolved = _resolved;
-    if (resolved == null) return;
-    final target = firstReachableIndex(
-      total: resolved.streams.length,
-      probes: _probes,
-      failed: _failedRows,
-      except: index,
-    );
-    if (_revertTo == null && target == null) return;
-    _failAttempt(
+    // Recovery decides: only before the attempt's first picture, and only
+    // with somewhere proven to go.
+    _onFailure(
+      FailureSign.unreachableWhileOpening,
       _l10n?.playerReasonNoAnswer ?? 'no answer from the link',
-      allowSameSourceRetry: false,
-      jumpTo: target,
     );
   }
 
-  /// Gives the attempt stamped [generation] until [kFirstFrameDeadline] - three
-  /// minutes for a [torrent], which is waiting on pieces to seed - to show a
-  /// picture, and moves on to the next source if it has not.
-  ///
-  /// Its own timer, counted from the moment the source starts opening and
-  /// whatever the engine reports. The stall watchdog cannot be the judge
-  /// here: it stands down while the engine says paused, stopped or ended, and
-  /// before the screen reaches its playing stage, and a source stuck in any of
-  /// those said "Opening…" for minutes. Off screen - backgrounded, or in
-  /// picture-in-picture - the wait is nobody's, so it starts over rather than
-  /// giving up on a source nobody is watching.
-  void _armFirstFrameDeadline(int generation, {required bool torrent}) {
-    _firstFrameDeadline?.cancel();
-    _firstFrameDeadline = Timer(
-      torrent ? kTorrentStallRecoverAfter : kFirstFrameDeadline,
-      () {
-        if (_disposed || generation != _generation || _sawFrames) return;
-        if (!_foreground || _inPip) {
-          _armFirstFrameDeadline(generation, torrent: torrent);
-          return;
-        }
-        _recover(
-          _l10n?.playerReasonSourceNeverStarted ?? 'the source never started',
-        );
-      },
+  /// Starts the first-frame watch for the attempt stamped [generation]:
+  /// given up on after 30 s with no sign of progress, or 60 s whatever the
+  /// progress; three minutes for a [torrent], waiting on pieces to seed (plan
+  /// note 6). Judged on the watchdog's tick, whatever the engine reports: the
+  /// stall watchdog stands down while the engine says paused, stopped or
+  /// ended, and before the screen reaches its playing stage, and a source
+  /// stuck in any of those said "Opening…" for minutes.
+  void _watchFirstFrame(int generation, {required bool torrent}) {
+    _firstFrameGeneration = generation;
+    _firstFrame = FirstFrameWatch(torrent: torrent);
+  }
+
+  /// One tick of the first-frame watch.
+  void _checkFirstFrame() {
+    final watch = _firstFrame;
+    if (watch == null || _disposed) return;
+    if (_sawFrames || _firstFrameGeneration != _generation) {
+      _firstFrame = null;
+      return;
+    }
+    // Off screen, waiting for the viewer's play, or parked: the wait is
+    // nobody's, and starts over rather than giving up on a source nobody is
+    // watching.
+    if (!_foreground || _inPip || _awaitingPlay || _parked) {
+      watch.restart();
+      return;
+    }
+    if (_handedToEngine && !_firstFrameSampling) {
+      unawaited(_sampleOpening(watch));
+    }
+    if (watch.verdict == FirstFrameVerdict.wait) return;
+    if (!_controller.isAttached && _remountedFor != _generation) {
+      // The media never reached a native player: it waits, queued in the
+      // controller, for one that never came (one iOS open in about sixty,
+      // 2026-10-13). libVLC never had it, so the source has not failed: a new
+      // VlcPlayer makes a new player, the media goes to it as it attaches, and
+      // the watch starts again. A second miss runs the recovery below as ever.
+      _qoe.error('no native player');
+      _remountedFor = _generation;
+      _setKeptPicture(false);
+      setState(() => _playerMount += 1);
+      watch.restart();
+      return;
+    }
+    _firstFrame = null;
+    _onFailure(
+      FailureSign.neverStarted,
+      _l10n?.playerReasonSourceNeverStarted ?? 'the source never started',
+    );
+  }
+
+  /// Reads what the opening attempt has to show for itself into [watch].
+  Future<void> _sampleOpening(FirstFrameWatch watch) async {
+    _firstFrameSampling = true;
+    VlcMediaStats? stats;
+    try {
+      stats = await _controller.getMediaStats();
+    } on Object {
+      stats = null;
+    }
+    _firstFrameSampling = false;
+    if (_disposed || !identical(watch, _firstFrame)) return;
+    final value = _controller.value;
+    watch.sample(
+      OpeningSample(
+        state: value.state,
+        prebuffer: value.bufferingProgress,
+        readBytes: stats?.readBytes ?? 0,
+        demuxReadBytes: stats?.demuxReadBytes ?? 0,
+        decodedVideo: stats?.decodedVideo ?? 0,
+        decodedAudio: stats?.decodedAudio ?? 0,
+        startGated: value.isStartGated,
+      ),
     );
   }
 
@@ -2321,7 +2861,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Starts both attempt clocks. Called when an attempt begins and again when
   /// the engine is finally handed media.
   void _startAttemptClock() {
-    _attemptAge = Duration.zero;
+    _attemptStartedAt = clock.now();
+    _playingAge = Duration.zero;
+    _stallClock.reset();
+    _starved.reset();
+    _ranSinceOpen = false;
+    _stopReported = false;
     _resetStallClock();
     // The decoder counters belong to one media. A reopen resets them natively,
     // so a baseline taken from the outgoing media would read as a colossal
@@ -2338,7 +2883,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   }
 
   void _resetStallClock() {
-    _stalledFor = Duration.zero;
+    _stallClock.restart();
+    _stallRestarted = true;
     _lastStallAction = StallAction.none;
   }
 
@@ -2353,6 +2899,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   void _checkStall() {
     if (_disposed || _stage != _Stage.playing) return;
     final value = _controller.value;
+    // Recovery is under way: its own schedule runs, and a parked or
+    // reopening source is not a stall.
+    if (_policy.phase != RecoveryPhase.watching || _parked) {
+      _resetStallClock();
+      return;
+    }
 
     // A frozen position is only a stall if playback was supposed to be
     // happening. A deliberate pause, a backgrounded app and PiP all freeze it
@@ -2384,19 +2936,26 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (seeks != _seenSeekRequests) {
       _seenSeekRequests = seeks;
       _lastSeekAt = _attemptAge;
+      // libVLC counts the jump as a demux discontinuity, which the
+      // smoothness window would blame on the source: it starts again here.
+      _videoBaseline = null;
+      _videoWindow = Duration.zero;
       if (_lastStallAction != StallAction.none) _setStatus('');
       _resetStallClock();
       return;
     }
 
-    _attemptAge += _kWatchdogTick;
-    _stalledFor += _kWatchdogTick;
+    _playingAge += _kWatchdogTick;
 
-    // The position moved since the last tick, so there is no stall to report
-    // and this second belongs to the other watchdog - the one that asks
-    // whether a picture came with the sound. Exactly one of the two speaks per
-    // tick, which is what keeps them from double-reporting the same second.
-    if (_stalledFor <= _kWatchdogTick) {
+    // The position moved since the last tick, or the count started again
+    // since: there is no stall to report, and this second belongs to the
+    // other watchdog - the one that asks whether a picture came with the
+    // sound. Exactly one of the two speaks per tick, which is what keeps them
+    // from double-reporting the same second.
+    final moved = _stallClock.tick(value.position);
+    final restarted = _stallRestarted;
+    _stallRestarted = false;
+    if (moved || restarted) {
       _watchVideoHealth();
       return;
     }
@@ -2407,7 +2966,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _videoWindow = Duration.zero;
 
     // A source that has never shown a picture is the first-frame deadline's to
-    // judge, on its own clock - see [_armFirstFrameDeadline]. This one stands
+    // judge, on its own watch - see [_checkFirstFrame]. This one stands
     // down in exactly the states such a source gets stuck in.
     if (!_sawFrames) return;
 
@@ -2428,6 +2987,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           : kStallRecoverAfter,
       arriving: _bytesArriving,
       afterSeek: afterSeek,
+      // HLS and DASH get no nudge (plan note 3).
+      adaptive: _adaptive,
     );
     switch (action) {
       case StallAction.none:
@@ -2440,13 +3001,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         _setStatus(_l10n?.playerReconnecting ?? '');
         unawaited(_nudge(value));
       case StallAction.recover:
-        final l10n = _l10n;
-        _recover(
-          _sawFrames
-              ? l10n?.playerReasonSourceStoppedResponding ??
-                    'the source stopped responding'
-              : l10n?.playerReasonSourceNeverStarted ??
-                    'the source never started',
+        _resetStallClock();
+        _lastStallAction = StallAction.recover;
+        _onFailure(
+          FailureSign.stalled,
+          _l10n?.playerReasonSourceStoppedResponding ??
+              'the source stopped responding',
         );
     }
   }
@@ -2491,9 +3051,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
   void _noteArrival(VlcMediaStats stats) {
     if (!stats.isAvailable) return;
+    // The demuxer's count for HLS and DASH: their segments come through
+    // libVLC's adaptive module, and the input's own count is the playlist's.
+    final bytes = arrivalBytesOf(stats, adaptive: _adaptive);
     final last = _arrivalReadBytes;
-    _arrivalReadBytes = stats.readBytes;
-    if (last != null && stats.readBytes > last) _bytesArrivedAt = _attemptAge;
+    _arrivalReadBytes = bytes;
+    if (last != null && bytes > last) _bytesArrivedAt = _attemptAge;
   }
 
   /// Whether the source has delivered anything in the last few seconds.
@@ -2583,13 +3146,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         readBytes: stats.readBytes,
         demuxReadBytes: stats.demuxReadBytes,
         position: position,
-        at: _attemptAge,
+        at: _playingAge,
         // What tells the estimate a skip happened, so the bytes the skip
         // stranded stop being counted as buffer. See [BufferedAheadEstimator].
         seekRequests: _controller.seekRequests,
         speed: value.playbackSpeed,
-        // The prefetch window libVLC was given, which is all it can hold.
-        capacityBytes: _bufferMb * 1024 * 1024,
+        // The read-ahead libVLC was given for this media, which is all it can
+        // hold; its own 16 MiB where the plan gave none.
+        capacityBytes: (_bufferPlan?.ringMb ?? kRingFloorMb) * 1024 * 1024,
       ),
     );
     _bufferedFraction.value = fraction ?? 0;
@@ -2613,6 +3177,35 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _updateBufferedAhead(stats);
     _noteArrival(stats);
 
+    // A picture frozen while the sound plays on (plan note 5): on HLS and
+    // DASH, where the video can starve alone. Recovery reopens where the
+    // picture stopped, not at the sound's playhead (decision 5).
+    final value = _controller.value;
+    final starvedAt = _adaptive && value.videoSize != null && stats.isAvailable
+        ? _starved.sample(
+            decodedVideo: stats.decodedVideo,
+            position: value.position,
+            running:
+                value.state == VlcPlaybackState.playing && !value.isStalled,
+            remaining: value.duration > Duration.zero
+                ? value.duration - value.position
+                : null,
+          )
+        : null;
+    if (starvedAt != null) {
+      _videoBaseline = null;
+      _videoWindow = Duration.zero;
+      if (_controller.pendingSeekTarget.value == null) {
+        _resumePosition = starvedAt;
+      }
+      _onFailure(
+        FailureSign.videoStarved,
+        _l10n?.playerReasonSourceStoppedResponding ??
+            'the source stopped responding',
+      );
+      return;
+    }
+
     final baseline = _videoBaseline;
     if (baseline == null) {
       // First reading of the window is the datum, never the verdict.
@@ -2629,6 +3222,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
     _reportSmoothness(stats, baseline);
 
+    final lost = stats.lostPictures - baseline.lost;
     final health = videoHealthFor(
       statsAvailable: stats.isAvailable,
       // Track info, not the vout, so this stays true for the very failure
@@ -2637,7 +3231,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       hasVideoTrack: _controller.value.videoSize != null,
       measuredFor: _videoWindow,
       displayed: stats.displayedPictures - baseline.displayed,
-      lost: stats.lostPictures - baseline.lost,
+      lost: lost,
     );
     if (health == VideoHealth.ok) return;
 
@@ -2649,10 +3243,26 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       case VideoHealth.ok:
         return;
       case VideoHealth.absent:
+        // On Android this is how MediaCodec dying mid-play looks: one reopen
+        // in software comes first. Not when the output dropped what the
+        // decoder made (the surface stall): that is the ordinary way's.
+        if (shouldRetryInSoftware(
+          platform: defaultTargetPlatform,
+          hardwareDecoding:
+              (_read(playerSettingsProvider).asData?.value ??
+                      const PlayerSettings())
+                  .hardwareDecoding,
+          alreadySoftware: _softwareRetry,
+          lostInWindow: lost,
+        )) {
+          _retryInSoftware();
+          return;
+        }
         // Nothing has reached the screen for a whole window while the clock
         // ran. Handed to the ladder, which already knows how to reopen a
         // source once and when to move on.
-        _recover(
+        _onFailure(
+          FailureSign.noPicture,
           _l10n?.playerReasonSourceNeverStarted ?? 'the source never started',
         );
       case VideoHealth.overwhelmed:
@@ -2668,15 +3278,58 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Bounded twice: [stepDownFrom] returns null at the floor, and the reopen
   /// carries the current retry count so it cannot refill the failover budget.
   void _stepDownRendition() {
-    final next = stepDownFrom(_adaptiveMaxHeight);
+    // `:adaptive-maxheight` means nothing to a progressive file: a reopen
+    // would buy nothing, and on the emulators it was the one that landed next
+    // to the outage (plan note 11).
+    if (!_adaptive) return;
+    // From the cap this media was opened with: Auto's - which the quality
+    // preference can have set below the device's - or a pick's.
+    final next = stepDownFrom(_renditionCap);
     // Already at the floor. Reopening on a loop is worse than the slideshow.
     if (next == null) return;
-    _adaptiveMaxHeight = next;
+    if (_qualityPick != null) {
+      // The pick comes down itself, so the Quality tab ticks what plays now.
+      _qualityPick = next;
+      _publishPanelData();
+    } else {
+      _adaptiveMaxHeight = next;
+    }
     unawaited(
       _openAttempt(
         _attemptIndex,
-        startAt: _resumePosition,
-        retries: _attemptRetries,
+        startAt: _reopenTarget(),
+        reason: 'step-down',
+        keepPicture: true,
+      ),
+    );
+  }
+
+  /// Reopens this source where it is, decoding in software, at the rendition
+  /// a CPU can manage (spec 1.6): what MediaCodec dying mid-play gets instead
+  /// of the same codec again and then a failover. Software for the rest of
+  /// the screen's life; a second failure goes the ordinary way.
+  void _retryInSoftware() {
+    _softwareRetry = true;
+    final cap = softwareRetryCap(
+      tier:
+          ref.read(deviceProfileProvider).asData?.value.tier ??
+          DeviceTier.standard,
+      panelHeightPx: _panelHeightPx(),
+      currentCap: _adaptiveMaxHeight,
+    );
+    _adaptiveMaxHeight = cap;
+    final pick = _qualityPick;
+    if (pick != null && pick > cap) {
+      // The pick comes down too, so the Quality tab ticks what plays now.
+      _qualityPick = cap;
+      _publishPanelData();
+    }
+    unawaited(
+      _openAttempt(
+        _attemptIndex,
+        startAt: _reopenTarget(),
+        reason: 'software',
+        keepPicture: true,
       ),
     );
   }
@@ -2706,33 +3359,40 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     await _controller.play();
   }
 
-  /// Hands a stalled source to the failover ladder.
+  /// Tells recovery when the device's network goes and comes back (spec 2:
+  /// "Check at once when connectivity changes"), starting from [first], the
+  /// screen's one question at start. Every change also keeps [_metered]
+  /// current, the way `isOnMeteredNetwork` reads it.
   ///
-  /// Not a reopen of its own: [_failAttempt] already reopens a source that was
-  /// playing, up to [_kSameSourceRetries], and moves on from one that was not.
-  /// Routing through it is what keeps the retry budget honest — a source that
-  /// stalls, recovers for three seconds and stalls again would otherwise
-  /// reopen forever without ever trying a different candidate.
-  void _recover(String reason) {
-    _resetStallClock();
-    _lastStallAction = StallAction.recover;
-    _failAttempt(reason);
-  }
-
-  /// Network restore short-circuits the wait.
-  ///
-  /// Scoped to a session that is already stalled: `onConnectivityChanged`
-  /// fires for interface changes that say nothing about reachability, and
-  /// reopening a healthy stream on one would be a self-inflicted rebuffer.
-  void _listenForNetworkRestore() {
+  /// A stall already ten seconds old when the network comes back is
+  /// recovery's at once: the connection it waits on died with the network.
+  void _listenForConnectivity(Future<List<ConnectivityResult>> first) {
+    unawaited(
+      first.then((results) {
+        if (!_disposed) _run(_policy.connectivity(online: _isOnline(results)));
+      }, onError: (Object _) {}),
+    );
     _connectivity = Connectivity().onConnectivityChanged.listen((results) {
-      if (_disposed || _stage != _Stage.playing) return;
-      if (!results.any((r) => r != ConnectivityResult.none)) return;
-      if (_lastStallAction == StallAction.recover) return;
-      if (_stalledFor < kStallNudgeAfter) return;
-      _recover(_l10n?.playerReasonNetworkDropped ?? 'the network dropped');
+      _metered = Future<bool>.value(
+        results.contains(ConnectivityResult.mobile),
+      );
+      if (_disposed) return;
+      final online = _isOnline(results);
+      _run(_policy.connectivity(online: online));
+      if (online &&
+          _stage == _Stage.playing &&
+          _policy.phase == RecoveryPhase.watching &&
+          _stalledFor >= kStallNudgeAfter) {
+        _onFailure(
+          FailureSign.stalled,
+          _l10n?.playerReasonNetworkDropped ?? 'the network dropped',
+        );
+      }
     });
   }
+
+  static bool _isOnline(List<ConnectivityResult> results) =>
+      results.any((result) => result != ConnectivityResult.none);
 
   /// End-of-media is ambiguous: a finished film and a truncated download look
   /// identical to the engine. Only a position short of the duration
@@ -2741,37 +3401,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (_disposed) return;
     _flushProgress();
 
-    // A live feed has no end. Reaching one means the stream dropped, so
-    // reopening the same source is the right answer - advancing or failing over
-    // to another source would abandon a channel that is merely interrupted.
+    final l10n = _l10n;
+    // A live feed has no end. Reaching one means the stream dropped:
+    // recovery reconnects it through its live budget, keeping the picture.
     if (_isLive) {
-      if (_liveReconnects >= _kMaxLiveReconnects) {
-        // This source keeps dropping without ever coming back; try another.
-        // Explicitly not a same-source retry: reopening is precisely what has
-        // just been tried five times.
-        _liveReconnects = 0;
-        _failAttempt(
-          _l10n?.playerReasonLiveFeedDropped ?? 'live feed dropped repeatedly',
-          allowSameSourceRetry: false,
-        );
-        return;
-      }
-      _liveReconnects++;
-      // The wait is spent on the overlay rather than on the last frame the
-      // feed produced: a frozen picture under a play glyph reads as a hang.
-      // _openAttempt would drop the flag anyway, but only after the delay.
-      _setSawFrames(false);
-      _setStatus(_l10n?.playerReconnecting ?? '');
-      final generation = _generation;
-      unawaited(
-        Future<void>.delayed(_kLiveReconnectDelay).then((_) async {
-          if (_disposed || generation != _generation) return;
-          await _openAttempt(
-            _attemptIndex,
-            startAt: Duration.zero,
-            retries: _attemptRetries,
-          );
-        }),
+      _onFailure(
+        FailureSign.falseEnd,
+        l10n?.playerReasonLiveFeedDropped ?? 'live feed dropped repeatedly',
       );
       return;
     }
@@ -2780,8 +3416,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       // This source ended without ever producing a frame, so there is nothing
       // that could have finished. It is a dead candidate, not a watched
       // episode - advancing on it would skip an episode nobody saw.
-      _failAttempt(
-        _l10n?.playerReasonStreamEndedBeforePlaying ??
+      _onFailure(
+        FailureSign.falseEnd,
+        l10n?.playerReasonStreamEndedBeforePlaying ??
             'stream ended before it played',
       );
       return;
@@ -2792,15 +3429,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     final sample = _sample;
     final duration = sample?.duration ?? _lastSeenDuration;
     final position = sample?.position ?? _lastSeenPosition;
-    // Two ways to be a failure wearing an ending's clothes. Short of the
-    // duration is a truncated download. No duration at all cannot be measured
-    // - an HLS manifest with no EXT-X-ENDLIST, an unindexed MKV over HTTP, a
-    // torrent whose header never completed - and "cannot tell" is treated as
-    // a failure so the failover ladder still gets its turn.
-    if (duration <= Duration.zero ||
-        position < duration - const Duration(seconds: 2)) {
-      _failAttempt(
-        _l10n?.playerReasonStreamEndedEarly ??
+    // Two ways to be a failure wearing an ending's clothes: see [isFalseEnd].
+    if (isFalseEnd(position: position, duration: duration)) {
+      _onFailure(
+        FailureSign.falseEnd,
+        l10n?.playerReasonStreamEndedEarly ??
             'stream ended before its duration',
       );
       return;
@@ -3042,6 +3675,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       // the place it changes - see [_publishPanelData].
       data: _panelData,
       onPickSource: (index) => _pickSource(index, onTrial: onTrial),
+      onPickQuality: _pickQuality,
       onPickEpisode: (episode) => unawaited(_pickEpisode(episode)),
       // The panel has no ProviderScope of its own, so the one question its
       // Episodes tab cannot answer - which of these have been seen - is
@@ -3142,6 +3776,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       failedSources: Set<int>.unmodifiable(_failedRows),
       playedSources: Set<int>.unmodifiable(_playedRows),
       qualityFilteredFallback: resolved?.qualityFilteredFallback ?? false,
+      // None while nothing plays: a failed stage has no stream to choose a
+      // quality of.
+      qualityLadder: _stage == _Stage.failed ? const <int>[] : _qualityLadder,
+      qualityPick: _qualityPick,
       // The list the next arrow walks, filtered the same way, so what the
       // panel offers and what Next does can never disagree.
       episodes: effectiveEpisodes(widget.item, _currentEpisode),
@@ -3189,18 +3827,46 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (_resolved == null) return;
     // Carry the position across, exactly as failover does, including before
     // the first sample lands.
-    final at = _controller.value.isLive ? Duration.zero : _resumePosition;
-    // The pick is on trial. Remember what it interrupted so its failure can put
-    // that back rather than take the session down with it.
-    if (onTrial) {
-      _revertTo = (index: _attemptIndex, position: at);
-    } else {
-      // A hand-picked source deserves the full ladder rather than the leftovers
-      // of the walk that already failed.
-      _tried.clear();
-      _attemptRetries = 0;
-    }
-    unawaited(_openAttempt(index, startAt: at));
+    final at = _reopenTarget();
+    // The pick is on trial: recovery remembers what it interrupted, so its
+    // failure puts that back rather than taking the session down with it. A
+    // hand-picked source otherwise deserves the full ladder rather than the
+    // leftovers of the walk that already failed.
+    if (!onTrial) _policy.reset();
+    unawaited(
+      _openAttempt(
+        index,
+        startAt: at,
+        reason: 'pick',
+        revertTo: onTrial ? _attemptIndex : null,
+      ),
+    );
+  }
+
+  /// A quality picked in the Quality tab: a height, or null for Auto.
+  ///
+  /// Holds for the rest of this player session. Reopens this source where it
+  /// is, as a step-down does, when it changes the cap the media plays under;
+  /// a pick of what Auto already plays at changes only the tick.
+  void _pickQuality(int? height) {
+    if (_disposed || _resolved == null || _stage != _Stage.playing) return;
+    if (height == _qualityPick) return;
+    _qualityPick = height;
+    _publishPanelData();
+    final cap = renditionCapFor(
+      deviceCap: _adaptiveMaxHeight,
+      pick: height,
+      preferenceHeight: _preferenceHeightAtOpen,
+    );
+    if (cap == _renditionCap) return;
+    unawaited(
+      _openAttempt(
+        _attemptIndex,
+        startAt: _reopenTarget(),
+        reason: 'quality',
+        keepPicture: true,
+      ),
+    );
   }
 
   /// A row selected on the startup view.
@@ -3255,11 +3921,18 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       _publishPanelData();
     });
     // A deliberate switch, not a failure: the walk that led here is over.
-    _tried.clear();
-    _revertTo = null;
+    _policy
+      ..candidatesChanged([
+        for (final stream in streams)
+          RecoveryCandidate(
+            authority: Uri.tryParse(stream.url)?.authority ?? '',
+            checkable: !isUncheckableSource(stream),
+          ),
+      ])
+      ..reset();
     // Different media, so a rotate press made over the last file is spent.
     _platform.followVideo();
-    await _openAttempt(_attemptIndex, startAt: Duration.zero);
+    await _openAttempt(_attemptIndex, startAt: Duration.zero, reason: 'pick');
   }
 
   /// Moves to the next episode in place, on this controller and this State.
@@ -3367,10 +4040,6 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// `kCompletedFraction`.
   void _startOver() {
     if (_disposed) return;
-    _tried.clear();
-    _revertTo = null;
-    _attemptRetries = 0;
-    _liveReconnects = 0;
     _sample = null;
     _handedToEngine = false;
     // The refusal was made about the previous viewing of this episode. Left
@@ -3379,6 +4048,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _nextEpisodeDeclined = false;
     _nextEpisodeOffer = null;
     setState(() => _ended = null);
+    _setKeptPicture(false);
     // The finished picture comes down here, before the first await, for the
     // reason [_startEpisode] drops it in the same place: the resolve and the
     // resume lookup can take seconds, and they would otherwise be spent on a
@@ -3469,6 +4139,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Everything between here and setMedia - the download lookup, the plugin
     // resolve, the resume lookup - can take seconds over a frozen frame.
     _handedToEngine = false;
+    _setKeptPicture(false);
     _setSawFrames(false);
     _setStatus('');
 
@@ -3514,6 +4185,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     final value = _controller.value;
     _syncPlayingState(value);
     _syncOrientation(value);
+    _qoeObserve(value);
     // Ahead of every early return below: a subtitle the media selected for
     // itself is just as on during a stall, an error or the end of the file,
     // and the window this closes has to close on the same tick whatever the
@@ -3525,6 +4197,97 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     final recorder = _recorder;
     if (recorder == null) return;
 
+    // A pause or a stop nobody asked for is a failure (spec 2, Detection):
+    // macOS paused at the end of a dropped connection's buffer before Part 3
+    // (VLCKit's --play-and-pause), and Android stops after an error. Asked
+    // for, it isn't: the viewer's, the background policy's and the app's own
+    // all count in pauseRequests, and the natives say when an audio
+    // interruption paused them.
+    // libVLC follows an end or an error with a stop: its input is gone. That
+    // stop belongs to the end or the error, not a failure of its own; read as
+    // one, a film's real end reopened its last seconds over the ended card.
+    if (value.state == VlcPlaybackState.ended ||
+        value.state == VlcPlaybackState.error) {
+      _ranSinceOpen = false;
+    }
+    if (value.state == VlcPlaybackState.playing ||
+        value.state == VlcPlaybackState.buffering) {
+      _ranSinceOpen = true;
+      _pauseRequestsWhenRunning = _controller.pauseRequests;
+    } else if (_ranSinceOpen &&
+        !_stopReported &&
+        _handedToEngine &&
+        !_parked &&
+        _pictureUp &&
+        _policy.phase == RecoveryPhase.watching &&
+        isUnaskedStop(
+          state: value.state,
+          pauseRequests: _controller.pauseRequests,
+          pauseRequestsWhenRunning: _pauseRequestsWhenRunning,
+          interruption: value.interruption,
+          foreground: _foreground,
+        )) {
+      _stopReported = true;
+      final sample = _sample;
+      final duration = sample?.duration ?? _lastSeenDuration;
+      final position = sample?.position ?? _lastSeenPosition;
+      if (value.state == VlcPlaybackState.paused &&
+          !_isLive &&
+          !isFalseEnd(position: position, duration: duration)) {
+        // Paused at the real end: the end, the way libVLC says it on every
+        // other platform (the backstop to FORK.md 32).
+        if (!_sawEnded) {
+          _sawEnded = true;
+          scheduleMicrotask(_handleEnded);
+        }
+      } else {
+        final sign = value.state == VlcPlaybackState.paused
+            ? FailureSign.pausedUnasked
+            : FailureSign.stoppedUnasked;
+        scheduleMicrotask(
+          () => _onFailure(
+            sign,
+            _l10n?.playerReasonSourceStoppedResponding ??
+                'the source stopped responding',
+          ),
+        );
+      }
+      return;
+    }
+
+    final starting =
+        value.state == VlcPlaybackState.buffering ||
+        value.state == VlcPlaybackState.playing;
+    if (_parked && _handedToEngine && starting) {
+      // The viewer's play started the parked media: a new attempt of the same
+      // source, which recovery watches like any other (decision 15), with an
+      // attempt's own edges, clocks and checks - a second error of the same
+      // kind, or a stale picture count, was the first attempt's.
+      _parked = false;
+      _sawError = false;
+      _sawEnded = false;
+      _checkGeneration += 1;
+      _startAttemptClock();
+      _qoe.waitEnd();
+      final resolved = _resolved;
+      if (resolved != null && _attemptIndex < resolved.streams.length) {
+        _qoeOpened(
+          _attemptIndex,
+          resolved.streams[_attemptIndex],
+          _controller.currentMediaSource?.startPosition ?? Duration.zero,
+          'play',
+          keptPicture: _keptPicture,
+        );
+      }
+      _policy.opened(source: _attemptIndex, live: _isLive);
+      _armRecoveryTimer();
+      _syncRecoveryLabel();
+      _watchFirstFrame(_generation, torrent: _attemptIsTorrent);
+    } else if (_awaitingPlay && starting) {
+      _awaitingPlay = false;
+      _watchFirstFrame(_generation, torrent: _attemptIsTorrent);
+    }
+
     // Both of these are edges, not levels, and neither may run synchronously
     // inside the listener - failing over calls setMedia, which notifies again.
     if (value.state == VlcPlaybackState.error) {
@@ -3534,7 +4297,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             value.errorDescription ??
             _l10n?.playerReasonPlaybackError ??
             'playback error';
-        scheduleMicrotask(() => _failAttempt(reason));
+        scheduleMicrotask(() => _onFailure(FailureSign.engineError, reason));
       }
       return;
     }
@@ -3598,7 +4361,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
       if (!sample.isWritable) return;
       _sample = sample;
-      _resumePosition = sample.position;
+      // A seek on its way is where playback is going; the sample is where it
+      // was, and every backend holds that until the seek lands.
+      if (_controller.pendingSeekTarget.value == null) {
+        _resumePosition = sample.position;
+      }
       recorder.record(sample, lastStreamUrl: _lastStreamUrl);
       _tracker?.onPlaying(sample);
       _maybeOfferNextEpisode(sample);
@@ -3622,9 +4389,24 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// them forever and never let failover reach a source that works.
   void _onProgress() {
     final firstFrame = !_sawFrames;
+    // A picture held through a reopen is the same picture: the bars stay as
+    // they are, and the hold has ended.
+    final wasKept = _keptPicture;
+    if (firstFrame) _setKeptPicture(false);
     // Read before the clock resets it: this is the only record that the
     // watchdog said anything.
-    final recovering = _lastStallAction != StallAction.none;
+    final nudged = _lastStallAction != StallAction.none;
+    // Recovery hears every move: healthy playback refills its budgets, and a
+    // stall libVLC rode out by itself ends its wait.
+    final wasRecovering = _policy.phase != RecoveryPhase.watching;
+    _policy.moved();
+    if (firstFrame) _policy.pictured();
+    final recovered = wasRecovering && _policy.phase == RecoveryPhase.watching;
+    if (recovered) {
+      _qoe.waitEnd();
+      _armRecoveryTimer();
+    }
+    final recovering = nudged || recovered;
     _setSawFrames(true);
     _resetStallClock();
     // A picture is up, so the video's tracks are as known as they will get:
@@ -3636,14 +4418,19 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // the first frame alone would leave the pill up through a recovery.
     if (firstFrame || recovering) _setStatus('');
     if (firstFrame) {
-      _firstFrameDeadline?.cancel();
+      _qoe.firstFrame(
+        surfaceWaitMs: _controller.value.videoSurfaceWait?.inMilliseconds,
+      );
+      _firstFrame = null;
       // Recorded for the source lists: this row has proved it can be reached.
       _playedRows.add(_attemptIndex);
       _publishPanelData();
+      _maybeReadQualityLadder();
+      _maybeReadLiveSegment();
       _setFailReason(null);
       // A new picture, so the bars come up over it for a moment; on a
       // television that is also where focus lands.
-      _chrome.poke();
+      if (!wasKept) _chrome.poke();
       // The seek has already been applied as a start position, so this is a
       // notice rather than a prompt - and it belongs on the first real frame,
       // not on the stage change, which fires while the engine is still opening.
@@ -3652,17 +4439,95 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         if (mounted) setState(() => _showResumeHint = true);
       }
     }
-    if (_attemptAge < _kHealthyPlayback) return;
-    _attemptRetries = 0;
-    _liveReconnects = 0;
-    // The pick has proved itself; there is nothing left to revert to.
-    _revertTo = null;
-    // The tried-set describes one failover walk, not the whole session: a
-    // source that has just played happily has earned a fresh walk if the
-    // network drops an hour from now.
-    _tried
-      ..clear()
-      ..add(_attemptIndex);
+  }
+
+  /// Records the open of [stream] at [index], and whether it is a reopen of
+  /// the same source or a move to another.
+  void _qoeOpened(
+    int index,
+    StreamResult stream,
+    Duration startAt,
+    String reason, {
+    bool keptPicture = false,
+  }) {
+    final previous = _qoeIndex;
+    _qoeIndex = index;
+    _qoeTracksKnown = false;
+    _qoe.open(
+      sourceIndex: index,
+      kind: _qoeKind(stream),
+      url: stream.url,
+      startAtMs: startAt.inMilliseconds,
+      reason: reason,
+      keptPicture: keptPicture,
+    );
+    if (reason == 'first') return;
+    if (previous != null && previous != index) {
+      _qoe.failover(from: previous, to: index, reason: reason);
+    } else {
+      _qoe.reopen(
+        reason: reason,
+        positionMs: startAt.inMilliseconds,
+        keptPicture: keptPicture,
+      );
+    }
+  }
+
+  /// What kind of media [stream] is, for the QoE record.
+  String _qoeKind(StreamResult stream) {
+    final url = stream.url;
+    if (isTorrentSource(stream) || _torrentFileIndex != null) return 'torrent';
+    if (url.startsWith('/') || url.startsWith('file:')) return 'local';
+    if (isLiveSource(widget.item, url)) return 'live';
+    final uri = Uri.tryParse(url);
+    if (uri != null && looksLikeHls(uri)) return 'hls';
+    if (uri != null && uri.path.toLowerCase().endsWith('.mpd')) return 'dash';
+    return 'file';
+  }
+
+  /// Records stalls and track changes as they begin and end.
+  void _qoeObserve(VlcPlayerValue value) {
+    if (value.isStalled != _qoeStalled) {
+      _qoeStalled = value.isStalled;
+      if (_qoeStalled) {
+        _qoe.stall(
+          value.position.inMilliseconds,
+          prebuffer: value.bufferingProgress,
+        );
+      } else {
+        _qoe.stallEnd();
+      }
+    }
+    final audio = value.activeAudioTrackId;
+    final subtitle = value.activeSubtitleTrackId;
+    if (_qoeTracksKnown) {
+      if (audio != _qoeAudio) _qoe.track(kind: 'audio', id: audio ?? -1);
+      if (subtitle != _qoeSubtitle) {
+        _qoe.track(kind: 'subtitle', id: subtitle ?? -1);
+      }
+    }
+    _qoeAudio = audio;
+    _qoeSubtitle = subtitle;
+    _qoeTracksKnown = _qoeTracksKnown || audio != null;
+  }
+
+  /// Records a seek when one is asked for, and when it has landed. A held
+  /// reopen's start is published as the target too (FORK.md 33), and is no
+  /// seek: only a target that came with a seek request counts.
+  void _qoeSeekChanged() {
+    final target = _controller.pendingSeekTarget.value;
+    final requests = _controller.seekRequests;
+    if (target != null && requests != _qoeSeekRequests) {
+      _qoeSeekRequests = requests;
+      _qoeSeekTarget = target;
+      _qoe.seek(
+        fromMs: _controller.value.position.inMilliseconds,
+        toMs: target.inMilliseconds,
+      );
+    } else if (target == null && _qoeSeekTarget != null) {
+      _qoeSeekTarget = null;
+      _qoe.seekDone();
+    }
   }
 
   /// Replaces the one line the viewer is given about what the player is doing.
@@ -3693,9 +4558,19 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     //
     // Ahead of the early return on purpose: `_setSawFrames(false)` is called
     // twice on some paths and the second call would otherwise do nothing.
-    if (!value) _clearLock();
+    if (!value && !_keptPicture) _clearLock();
     if (_sawFrames == value) return;
     _sawFrames = value;
+    if (mounted && !_disposed) setState(() {});
+  }
+
+  /// Whether a same-source reopen shows the last picture, set through the
+  /// build: the start-up view, the controls and the pill all follow
+  /// [_pictureUp].
+  void _setKeptPicture(bool value) {
+    if (_keptPicture == value) return;
+    _keptPicture = value;
+    if (!value && !_sawFrames) _clearLock();
     if (mounted && !_disposed) setState(() {});
   }
 
@@ -3835,6 +4710,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         state != AppLifecycleState.paused &&
         state != AppLifecycleState.hidden &&
         state != AppLifecycleState.detached;
+    // Recovery checks nothing off screen, and checks at once on the return
+    // (spec 2, *Background*). Picture-in-picture is on screen: `inactive`.
+    _run(_policy.foreground(visible: _foreground));
     if (state == AppLifecycleState.resumed) {
       // However long the app was away is not time this source spent stalled,
       // and the engine needs a moment to get its position moving again.
@@ -3975,7 +4853,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (_ended != null) return false;
     if (_form != PlayerFormFactor.tv ||
         _stage != _Stage.playing ||
-        !_sawFrames ||
+        !_pictureUp ||
         _inPip) {
       return false;
     }
@@ -4015,12 +4893,20 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
   void _fail(String message) {
     if (_disposed) return;
+    _qoe.error(message);
     // Nothing is opening any more, so nothing has a first frame to be late for.
-    _firstFrameDeadline?.cancel();
+    _firstFrame = null;
+    // Media still queued for a native player that has not come must not start
+    // behind the failed frame when one does.
+    if (!_controller.isAttached) unawaited(_controller.stop());
     // Same rule as [_showEnded] and [_setSawFrames]: the failed frame unmounts
     // the whole controls subtree, so the chip that undoes the lock goes with
     // it and Back would do nothing on the first press.
+    _setKeptPicture(false);
     _clearLock();
+    // Nothing plays here: the display may sleep. Retry and a pick take the
+    // wakelock again as they open.
+    unawaited(WakelockPlus.disable());
     setState(() {
       _stage = _Stage.failed;
       // Resolution itself can fail before anything opened. A pick from the
@@ -4137,13 +5023,125 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   ) async {
     final length = await measureHlsVideoLength(
       uri,
-      (url) => _fetchPlaylist(url, headers),
+      (url) => url == uri
+          ? _readOpenedPlaylist(url, headers)
+          : _fetchPlaylist(url, headers),
     );
     if (_disposed || generation != _generation || length == null) return;
     _videoLength = length;
     if (_controller.value.duration > length + _kLengthSlack) {
       _capLength(length);
     }
+  }
+
+  /// Reads a live HLS stream's target duration once a picture shows, for its
+  /// window's stretch (spec section 8): from the playlist this attempt
+  /// opened, or the first one a master lists. Unread, the window assumes 10 s
+  /// segments.
+  void _maybeReadLiveSegment() {
+    final media = _liveMedia;
+    if (media == null) return;
+    _liveMedia = null;
+    final generation = _generation;
+    unawaited(() async {
+      var playlist = await _readOpenedPlaylist(media.uri, media.headers);
+      if (playlist != null && targetDurationOf(playlist) == null) {
+        // A master served through SkyStream's proxy names its variants
+        // relative to the real address, which the proxy carries in its query.
+        final real = media.uri.path == '/proxy'
+            ? Uri.tryParse(media.uri.queryParameters['url'] ?? '')
+            : null;
+        final variant = firstVariantOf(playlist, base: real ?? media.uri);
+        playlist = variant == null
+            ? null
+            : await _fetchPlaylist(variant, media.headers);
+      }
+      final segment = playlist == null ? null : targetDurationOf(playlist);
+      if (segment == null || _disposed || generation != _generation) return;
+      setState(() => _liveSegment = segment);
+    }());
+  }
+
+  /// Seeks a live stream inside its window (spec section 8), and keeps what
+  /// it was for [_onSeekSettled].
+  void _seekInLiveWindow(double fraction, {bool toLive = false}) {
+    final value = _controller.value;
+    final window = LiveWindow.of(value, targetDuration: _liveSegment);
+    if (window == null) return;
+    _liveSeek = (
+      target: value.position + window.length * (fraction - window.fraction),
+      behind: window.length * (1 - fraction),
+      segment: window.segment,
+      toLive: toLive,
+    );
+    unawaited(_controller.seekToWindowFraction(fraction));
+  }
+
+  /// Back to the live edge: one segment from the end, as close as libVLC 3
+  /// plays.
+  void _goLive() {
+    final window = LiveWindow.of(
+      _controller.value,
+      targetDuration: _liveSegment,
+    );
+    if (window == null) return;
+    _seekInLiveWindow(window.endFraction, toLive: true);
+  }
+
+  /// A seek in a live window has settled: taken, or given up after the
+  /// controller sent it once more. One libVLC didn't take reopens the stream
+  /// with its live delay set to the target's distance from the edge, which
+  /// makes libVLC start there; LIVE's reopens at the live start.
+  void _onSeekSettled() {
+    final seek = _liveSeek;
+    if (seek == null || _controller.pendingSeekTarget.value != null) return;
+    _liveSeek = null;
+    final value = _controller.value;
+    if (_disposed || _stage != _Stage.playing) return;
+    // Settled because the media went away: that is the recovery's business.
+    final state = value.state;
+    if (state != VlcPlaybackState.playing &&
+        state != VlcPlaybackState.buffering &&
+        state != VlcPlaybackState.paused) {
+      return;
+    }
+    if ((value.position - seek.target).abs() <= seek.segment * 1.5) return;
+    _nextLiveDelayMs = seek.toLive ? null : seek.behind.inMilliseconds;
+    unawaited(
+      _openAttempt(
+        _attemptIndex,
+        startAt: Duration.zero,
+        reason: 'live',
+        keepPicture: true,
+      ),
+    );
+  }
+
+  /// Reads the Quality tab's ladder for the media this attempt opened, once
+  /// per source: after its first picture, so libVLC has read the playlist
+  /// first - an address that works once is the player's to spend.
+  void _maybeReadQualityLadder() {
+    final media = _qualityMedia;
+    if (media == null || media.source == _qualityLadderOf) return;
+    _qualityLadderOf = media.source;
+    unawaited(_readQualityLadder(media.uri, media.headers, media.source));
+  }
+
+  Future<void> _readQualityLadder(
+    Uri uri,
+    Map<String, String> headers,
+    String source,
+  ) async {
+    final playlist = await _readOpenedPlaylist(uri, headers);
+    // Another source's open has taken the ladder down and asks for its own.
+    if (_disposed || _qualityLadderOf != source) return;
+    if (playlist == null) {
+      // Asked again the next time this source shows a picture.
+      _qualityLadderOf = null;
+      return;
+    }
+    _qualityLadder = qualityLadderOf(hlsVariantsOf(playlist));
+    _publishPanelData();
   }
 
   void _capLength(Duration length) {
@@ -4155,23 +5153,88 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (sample != null && sample.duration > length) _sample = null;
   }
 
+  /// The playlist this attempt opened, asked for at most once - see
+  /// [_openedPlaylist].
+  Future<String?> _readOpenedPlaylist(Uri uri, Map<String, String> headers) {
+    final read = _openedPlaylist;
+    if (read != null && read.uri == uri) return read.playlist;
+    final playlist = _fetchPlaylist(uri, headers);
+    _openedPlaylist = (uri: uri, playlist: playlist);
+    return playlist;
+  }
+
   /// One playlist, asked for with the headers libVLC was given for it.
+  ///
+  /// Read as it arrives, and only while it is one: an address marked adaptive
+  /// can answer with a film, which read as text would be held in memory
+  /// whole. Null for an answer that doesn't start `#EXTM3U`, or runs past
+  /// [_kPlaylistMaxBytes].
   Future<String?> _fetchPlaylist(Uri url, Map<String, String> headers) async {
+    final hangUp = CancelToken();
+    final Stream<Uint8List>? body;
     try {
-      final response = await _read(dioClientProvider).getUri<String>(
+      final response = await _read(dioClientProvider).getUri<ResponseBody>(
         url,
+        cancelToken: hangUp,
         options: Options(
           headers: headers,
-          responseType: ResponseType.plain,
+          responseType: ResponseType.stream,
           receiveTimeout: _kPlaylistTimeout,
           sendTimeout: _kPlaylistTimeout,
         ),
       );
-      return response.data;
+      body = response.data?.stream;
     } catch (_) {
       return null;
     }
+    if (body == null) return null;
+    final read = Completer<String?>();
+    final bytes = BytesBuilder(copy: false);
+    var looked = false;
+    late final StreamSubscription<Uint8List> reading;
+    // Dio reads a streamed answer to its end after its reader has stopped,
+    // so stopping is not enough: only a cancel hangs up the rest.
+    void stop() {
+      unawaited(reading.cancel());
+      hangUp.cancel();
+      if (!read.isCompleted) read.complete(null);
+    }
+
+    reading = body.listen(
+      (chunk) {
+        bytes.add(chunk);
+        if (bytes.length > _kPlaylistMaxBytes) {
+          stop();
+        } else if (!looked && bytes.length >= _kPlaylistHeadBytes) {
+          if (_startsAsPlaylist(bytes.toBytes())) {
+            looked = true;
+          } else {
+            stop();
+          }
+        }
+      },
+      onError: (Object _) => stop(),
+      onDone: () {
+        if (read.isCompleted) return;
+        final all = bytes.takeBytes();
+        read.complete(
+          looked || _startsAsPlaylist(all)
+              ? utf8.decode(all, allowMalformed: true)
+              : null,
+        );
+      },
+      cancelOnError: true,
+    );
+    return read.future;
   }
+
+  /// Whether [bytes] open the way an HLS playlist does, past any byte order
+  /// mark and blank lines.
+  static bool _startsAsPlaylist(List<int> bytes) => utf8
+      .decode(bytes.take(_kPlaylistHeadBytes).toList(), allowMalformed: true)
+      .replaceFirst('\uFEFF', '')
+      .trimLeft()
+      .startsWith('#EXTM3U');
 
   @override
   void dispose() {
@@ -4186,12 +5249,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _tracker?.finish();
     _disposed = true;
     _torrentPoll?.cancel();
+    _waitAwake?.cancel();
     _pickCooldown?.cancel();
     _abandonPendingResolve();
     _backEcho?.cancel();
     _lockEscape?.cancel();
     _watchdog?.cancel();
-    _firstFrameDeadline?.cancel();
+    _recoveryTimer?.cancel();
     unawaited(_checkChanges?.cancel());
     _checkTick?.cancel();
     // After the controls, which unmount first and stop listening; its hide
@@ -4215,6 +5279,17 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // over a screen that no longer exists.
     _platform.detachPipListener();
     _handBack();
+    _qoe.end(
+      _stage == _Stage.failed
+          ? 'failed'
+          : _ended != null
+          ? 'ended'
+          : 'left',
+    );
+    _qoeMemory?.cancel();
+    _controller.pendingSeekTarget.removeListener(_qoeSeekChanged);
+    _controller.pendingSeekTarget.removeListener(_onSeekSettled);
+    _controller.pendingSeekTarget.removeListener(_followSeekTarget);
     _controller.removeListener(_onPlaybackValue);
     _controller.dispose();
     // The torrent server seeds in the background; nothing else stops it.
@@ -4246,31 +5321,61 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     );
   }
 
-  /// The buffer the viewer asked for, in megabytes.
-  ///
-  /// One number for both engines. libVLC takes it as a prefetch window and
-  /// TorrServer as its piece cache: a viewer who chose 256 MB meant it for
-  /// whatever they are watching, and a torrent used to ignore them for a
-  /// hard-coded 64.
-  int get _bufferMb => resolveNetworkBufferMb(
-    ref.read(playerSettingsProvider).asData?.value.networkBufferMb,
-    ref.read(deviceProfileProvider).asData?.value.tier ?? DeviceTier.standard,
-  );
-
-  /// Hands the torrent server the same buffer, split so some of it stays
-  /// behind the playhead.
-  ///
-  /// Fire and forget: the server may not be up, may be about to be started by
-  /// a source resolver, or may not be involved at all on a direct stream. It
-  /// remembers either way, and nothing about playback waits on it.
-  void _applyTorrentBuffer() {
-    final mb = _bufferMb;
-    unawaited(
-      _read(torrentServiceProvider).applyBufferSettings(
-        cacheMb: mb,
-        readAheadPercent: torrentReadAheadPercent(mb),
+  /// The read-ahead for [stream], opening as [media] on a network that is
+  /// [metered] or not, under the rule in [bufferPlanFor], recorded in the QoE
+  /// log.
+  Future<BufferPlan> _planBuffer(
+    StreamResult stream,
+    BufferMedia media, {
+    required bool metered,
+  }) async {
+    final memory = await _memory;
+    // The next open's reading, taken while this one plays.
+    _memory = readDeviceMemory();
+    final profile = _read(deviceProfileProvider).asData?.value;
+    final settings =
+        _read(playerSettingsProvider).asData?.value ?? const PlayerSettings();
+    final item = widget.item;
+    final plan = bufferPlanFor(
+      media: media,
+      memory: memory,
+      fallbackRamMb:
+          profile?.physicalRamMb ??
+          tierRamMb(profile?.tier ?? DeviceTier.standard),
+      metered: metered,
+      fileBytes: probedSizeOf(stream.url) ?? sizeFromLabel(stream.source),
+      runtime: runtimeFor(
+        measured: _initialResume?.total,
+        episodeMinutes: _currentEpisode?.runtime,
+        itemMinutes: item.duration,
+        tmdbMinutes: item is TmdbDetails ? item.runtime : null,
       ),
+      label: stream.source,
+      height: stream.quality,
+      maxHeight: _renditionCap,
+      overrideMb: settings.bufferOverrideMb,
     );
+    _qoe.buffer({
+      ...plan.toJson(),
+      'totalMb': memory.totalMb,
+      'freeMb': memory.freeMb,
+      'metered': metered,
+      'overrideMb': settings.bufferOverrideMb,
+    });
+    return plan;
+  }
+
+  /// What kind of media [mediaUri] is, for the buffer rule.
+  BufferMedia _bufferMediaFor(Uri mediaUri) {
+    if (_attemptIsTorrent) return BufferMedia.torrent;
+    if (mediaUri.scheme == 'file' || mediaUri.scheme == 'content') {
+      return BufferMedia.local;
+    }
+    if (_isLive) return BufferMedia.live;
+    if (looksLikeHls(mediaUri) || looksLikeDash(mediaUri)) {
+      return BufferMedia.adaptive;
+    }
+    return BufferMedia.httpFile;
   }
 
   @override
@@ -4309,21 +5414,25 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             // path VlcPlayer draws its own FittedBox from this, and the
             // native setFit behind it is a no-op on Windows and Linux.
             //
-            // Offstage rather than absent under the diagnostic switch: on
-            // the texture platforms VlcPlayer's own initState attaches the
-            // native player, so a widget left out of the tree is no player
-            // at all. Offstage keeps the element and drops only the paint.
-            if (_stage == _Stage.playing)
-              Offstage(
-                offstage: PlayerDiagnostics.suppressVideoSurface,
-                child: VlcPlayer(
-                  controller: _controller,
-                  fit: _fit,
-                  darwinRenderer: playerDarwinRenderer,
-                  androidRenderer: playerAndroidRenderer,
-                  backgroundColor: playerBackdropColor,
-                ),
+            // In the tree from the screen's first frame, so libVLC and its
+            // output are created while the route animates and the links
+            // resolve (spec 1.8): on the texture platforms VlcPlayer's own
+            // initState attaches the native player. Offstage, which keeps the
+            // element and drops only the paint, until the media is handed
+            // over, and under the diagnostic switch.
+            Offstage(
+              offstage:
+                  PlayerDiagnostics.suppressVideoSurface ||
+                  _stage != _Stage.playing,
+              child: VlcPlayer(
+                key: ValueKey<int>(_playerMount),
+                controller: _controller,
+                fit: _fit,
+                darwinRenderer: playerDarwinRenderer,
+                androidRenderer: playerAndroidRenderer,
+                backgroundColor: playerBackdropColor,
               ),
+            ),
             // Subtitle files, drawn over the picture rather than into it, so
             // the fit never reaches them - and in PiP as well, as libVLC's
             // were. Lifted over the controls while those are up.
@@ -4335,7 +5444,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             // is one element across all of it: the player is inserted
             // beneath it as opening begins, and unkeyed it would be rebuilt
             // there with its list back at the top.
-            if (_stage != _Stage.playing || (!_inPip && !_sawFrames))
+            if (_stage != _Stage.playing || (!_inPip && !_pictureUp))
               _startupView(l10n, isTv: isTv),
             // At PiP size the frame is about a sixth of the screen: bars,
             // scrims and gesture layers are an unreadable smear over most of
@@ -4348,7 +5457,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             // remote back.
             if (_stage == _Stage.playing &&
                 !_inPip &&
-                _sawFrames &&
+                _pictureUp &&
                 _ended == null) ...[
               // The overlay gets its own layer so a chrome repaint never
               // forces the embedder to recomposite the video surface beneath
@@ -4396,6 +5505,15 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                       : null,
                   isFullscreen: _isFullscreen,
                   isLive: _isLive,
+                  liveSegment: _liveSegment,
+                  // The delay a live stream opens at, not a fallback
+                  // reopen's own: that one is the distance it went back.
+                  liveDelay: Duration(
+                    milliseconds:
+                        PlayerDiagnostics.liveDelayMs ?? kLiveDelayMs,
+                  ),
+                  onLiveSeek: _seekInLiveWindow,
+                  onGoLive: _goLive,
                   skipSegments: _skipSegments,
                   // Null on a film and on the last episode, where the chip
                   // keeps its plain seek to the end of the credits because
@@ -4445,7 +5563,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             ],
             // A sibling of the controls, never a child: see the gate above.
             if (_ended case final kind?
-                when _stage == _Stage.playing && !_inPip && _sawFrames)
+                when _stage == _Stage.playing && !_inPip && _pictureUp)
               _endedCard(kind, isTv: isTv),
           ],
         ),
@@ -4454,7 +5572,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   }
 
   Widget _sideCarSubtitles({required bool isTv}) {
-    final controlsShown = !_inPip && _sawFrames && _ended == null;
+    final controlsShown = !_inPip && _pictureUp && _ended == null;
     return Consumer(
       builder: (context, ref, _) {
         final settings =
@@ -4610,10 +5728,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// spent by the time this screen is reachable.
   void _retry() {
     if (_disposed) return;
-    _tried.clear();
-    _revertTo = null;
-    _attemptRetries = 0;
-    _liveReconnects = 0;
+    _policy.reset();
+    // Awake from here: resolving again can take seconds before the open.
+    unawaited(WakelockPlus.enable());
     // A Stremio title's links came from its add-on, and by now every one of
     // them has failed - or expired, on a page left open: ask it again.
     if (widget.item.source == kAddonItemSource) _preloaded = null;
@@ -4665,6 +5782,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           _torrentFileLabel ??
           (hasCurrent ? sourceRowLabel(sources[current]) : null),
       status: _startupStatus(l10n, sources: sources),
+      detail: _torrentDetail(l10n),
       reason: failed ? null : _failReason,
       attempt: hasCurrent ? (index: current + 1, total: sources.length) : null,
       rows: <StartupRow>[
@@ -4678,7 +5796,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             ),
             playState: sourcePlayStateOf(
               isCurrent: i == current,
-              hasPicture: _sawFrames,
+              hasPicture: _pictureUp,
               failed: _failedRows.contains(i),
             ),
           ),
@@ -4692,6 +5810,25 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       // a television has no window to full-screen.
       onDoubleClick: _fullscreenAvailable ? _toggleFullscreen : null,
       isTv: isTv,
+    );
+  }
+
+  /// The line under "Preparing torrent…" (spec 5): peers connected out of
+  /// those known, the speed and what is loaded, from the 3 s status poll. All
+  /// three always, so the line doesn't jump about while metadata comes.
+  String? _torrentDetail(AppLocalizations l10n) {
+    final status = _torrentStatus;
+    if (!_attemptIsTorrent ||
+        _pictureUp ||
+        _stage == _Stage.failed ||
+        status == null) {
+      return null;
+    }
+    return l10n.playerTorrentPeers(
+      status.peers,
+      status.totalPeers,
+      '${formatFileSize(status.downloadSpeed, fractionDigits: 1)}/s',
+      formatFileSize(status.loadedBytes, fractionDigits: 0),
     );
   }
 

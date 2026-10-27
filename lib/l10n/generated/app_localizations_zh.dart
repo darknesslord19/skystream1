@@ -1337,7 +1337,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get getApiKeyFromProfile => '从 SubSource 个人资料获取您的 API 密钥';
 
   @override
-  String get qualityNotGuaranteed => '不保证质量。来源按偏好排序，但播放取决于提供商实际提供的内容。';
+  String get qualityNotGuaranteed =>
+      '不保证画质。来源会按此偏好排序，提供多种画质的流会以此画质或低于它的最接近画质播放。实际播放取决于提供者真正提供的内容。';
 
   @override
   String get keepSourcesOriginalOrder => '保持来源原始顺序';
@@ -1465,6 +1466,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1509,6 +1520,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2337,6 +2351,37 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get actorRoleBackground => '路人';
+
+  @override
+  String get playerQuality => '画质';
+
+  @override
+  String get playerQualityAuto => '自动';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return '自动 · $height';
+  }
+
+  @override
+  String get networkBufferAuto => '自动（推荐）';
+
+  @override
+  String get networkBufferAutoHint => '根据每个视频的码率和本设备的内存确定大小。';
+
+  @override
+  String get devQoeLog => 'QoE 日志';
+
+  @override
+  String get devQoeLogSubtitle => '将播放时间写入应用日志';
+
+  @override
+  String get playerGoLive => '前往直播';
+
+  @override
+  String playerBehindLive(String time) {
+    return '落后直播 $time';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hant`).
@@ -3591,7 +3636,8 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
   String get getApiKeyFromProfile => '从 SubSource 个人资料获取您的 API 密钥';
 
   @override
-  String get qualityNotGuaranteed => '不保证质量。来源按偏好排序，但播放取决于提供商实际提供的内容。';
+  String get qualityNotGuaranteed =>
+      '不保證畫質。來源會依此偏好排序，提供多種畫質的串流會以此畫質或低於它的最接近畫質播放。實際播放取決於提供者真正提供的內容。';
 
   @override
   String get keepSourcesOriginalOrder => '保持来源原始顺序';
@@ -3704,4 +3750,35 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get actorRoleBackground => '路人';
+
+  @override
+  String get playerQuality => '畫質';
+
+  @override
+  String get playerQualityAuto => '自動';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return '自動 · $height';
+  }
+
+  @override
+  String get networkBufferAuto => '自動（建議）';
+
+  @override
+  String get networkBufferAutoHint => '依每部影片的位元率與這台裝置的記憶體決定大小。';
+
+  @override
+  String get devQoeLog => 'QoE 記錄';
+
+  @override
+  String get devQoeLogSubtitle => '將播放時間寫入應用程式記錄';
+
+  @override
+  String get playerGoLive => '前往直播';
+
+  @override
+  String playerBehindLive(String time) {
+    return '落後直播 $time';
+  }
 }

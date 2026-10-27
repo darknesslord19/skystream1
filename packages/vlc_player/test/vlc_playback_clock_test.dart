@@ -503,12 +503,14 @@ void main() {
     });
 
     testWidgets('a seek the engine never takes is let go when the controller '
-        'gives up on it', (tester) async {
+        'gives up on it, after asking once more', (tester) async {
       await attach();
       await report('playing', 600000);
       await controller.seekTo(ms(1800000));
 
-      for (var step = 1; step <= 11; step++) {
+      // A dozen reports carrying on send the seek once more; a second dozen
+      // give it up.
+      for (var step = 1; step <= 23; step++) {
         await tester.pump(ms(250));
         await report('playing', 600000 + step * 250);
       }
@@ -516,11 +518,29 @@ void main() {
       expect(controller.pendingSeekTarget.value, ms(1800000));
 
       await tester.pump(ms(250));
-      await report('playing', 603000);
+      await report('playing', 606000);
       expect(controller.pendingSeekTarget.value, isNull);
-      expect(clock(), 603000);
+      expect(clock(), 606000);
       await tester.pump(ms(100));
-      expect(clock(), 603100);
+      expect(clock(), 606100);
+      controller.dispose();
+    });
+
+    testWidgets('a seek echoed and then refused waits at its target again '
+        'when it is sent once more', (tester) async {
+      await attach();
+      await report('playing', 600000);
+      await controller.seekTo(ms(1800000));
+
+      // The time reported straight back, then the engine carrying on from
+      // where it was: libVLC refused the seek.
+      await report('playing', 1800000);
+      for (var step = 1; step <= 12; step++) {
+        await tester.pump(ms(250));
+        await report('playing', 600000 + step * 250);
+      }
+      expect(controller.pendingSeekTarget.value, ms(1800000));
+      expect(clock(), 1800000);
       controller.dispose();
     });
 
@@ -533,14 +553,14 @@ void main() {
       await report('playing', 600000);
       await controller.seekTo(ms(1800000));
 
-      for (var step = 1; step <= 12; step++) {
+      for (var step = 1; step <= 24; step++) {
         await tester.pump(ms(250));
         await report('playing', 600000 + step * 500, speed: 2);
       }
       expect(controller.pendingSeekTarget.value, isNull);
-      expect(clock(), 606000);
+      expect(clock(), 612000);
       await tester.pump(ms(100));
-      expect(clock(), 606200);
+      expect(clock(), 612200);
       controller.dispose();
     });
   });

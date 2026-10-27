@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:vlc_player/vlc_player.dart';
@@ -45,16 +47,22 @@ void main() {
       autoPlay: true,
     );
     clock.stop();
+    // For the device matrix's record.
+    debugPrint(
+      'stalled_stream_teardown: switch ${clock.elapsedMilliseconds} ms',
+    );
 
     expect(
       clock.elapsed,
       lessThan(const Duration(seconds: 2)),
       reason: 'switching source waited on the stalled stream',
     );
-    // And the source it switched to really plays, picture and all.
+    // And the source it switched to really plays, picture and all. videoSize
+    // is what every backend reports for a picture; displayVideoSize is null
+    // on Windows and Linux by design (it serves phones' orientation).
     await pumpUntil(
       tester,
-      () => controller.value.displayVideoSize != null,
+      () => controller.value.videoSize != null,
       description: 'the new source playing',
     );
     expect(controller.value.hasError, isFalse);
@@ -77,6 +85,9 @@ void main() {
     // thread is free again.
     await Future<void>.delayed(const Duration(milliseconds: 50));
     clock.stop();
+    debugPrint(
+      'stalled_stream_teardown: leave ${clock.elapsedMilliseconds} ms',
+    );
 
     expect(
       clock.elapsed,
@@ -84,14 +95,93 @@ void main() {
       reason: 'leaving the player waited on the stalled stream',
     );
   });
+
+  testWidgets('leaving the player while the stalled stream it switched away '
+      'from still stops is immediate', (tester) async {
+    // A replaced player stops on a thread of its own and keeps its view until
+    // it has (FORK.md 29). Leaving destroys that view, and libvlc-android's
+    // listener turned the video off on the main thread, behind the input
+    // lock the stop holds while the read hangs: 22 minutes after a network
+    // loss in SkyStream's offline row on Android (P1 Part 3). The stream shows
+    // a picture first: a view that never drew has no surface to lose.
+    final server = await _StallingHlsServer.start(
+      film: await _materializeFilm(),
+    );
+    addTearDown(server.close);
+    final controller = await _playStalledStream(tester, server, picture: true);
+    await controller.setMedia(
+      VlcMediaSource(uri: await materializeAsset('$_assetRoot/video.mp4')),
+      autoPlay: true,
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    final clock = Stopwatch()..start();
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    clock.stop();
+    debugPrint(
+      'stalled_stream_teardown: leave after a switch '
+      '${clock.elapsedMilliseconds} ms',
+    );
+
+    expect(
+      clock.elapsed,
+      lessThan(const Duration(seconds: 2)),
+      reason: 'leaving the player waited on the stalled player it replaced',
+    );
+  });
+
+  testWidgets('resizing the player while the stalled stream it switched away '
+      'from still stops is immediate', (tester) async {
+    // libvlc-android's layout listener on the replaced player's views
+    // answered a resize of the container - a rotation, picture-in-picture -
+    // by calling into libVLC on the main thread when that player had no
+    // picture size yet, behind the input lock its stop holds (FORK.md 29).
+    final server = await _StallingHlsServer.start();
+    addTearDown(server.close);
+    final size = ValueNotifier<Size>(const Size(240, 135));
+    addTearDown(size.dispose);
+    final controller = await _playStalledStream(tester, server, size: size);
+    await controller.setMedia(
+      VlcMediaSource(uri: await materializeAsset('$_assetRoot/video.mp4')),
+      autoPlay: true,
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    final clock = Stopwatch()..start();
+    // The rotation.
+    size.value = const Size(135, 240);
+    await tester.pump();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await tester.pump();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    clock.stop();
+    debugPrint(
+      'stalled_stream_teardown: resize after a switch '
+      '${clock.elapsedMilliseconds} ms',
+    );
+
+    expect(
+      clock.elapsed,
+      lessThan(const Duration(seconds: 2)),
+      reason: 'the resize waited on the stalled player it replaced',
+    );
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+  });
 }
 
 /// Mounts a player with the app's network options and has it open the stalled
-/// live stream, then waits until libVLC is inside the download that hangs.
+/// stream, then waits until libVLC is inside the download that hangs, and with
+/// [picture], until the stream's own picture is up. [size], when given, sizes
+/// the player and can change under it.
 Future<VlcPlayerController> _playStalledStream(
   WidgetTester tester,
-  _StallingHlsServer server,
-) async {
+  _StallingHlsServer server, {
+  bool picture = false,
+  ValueListenable<Size>? size,
+}) async {
   final controller = VlcPlayerController(
     options: <String>[
       ...headlessPlayerOptions(),
@@ -104,18 +194,36 @@ Future<VlcPlayerController> _playStalledStream(
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: SizedBox(
-          width: 240,
-          height: 135,
+        body: ValueListenableBuilder<Size>(
+          valueListenable: size ?? ValueNotifier<Size>(const Size(240, 135)),
+          builder: (context, size, child) =>
+              SizedBox(width: size.width, height: size.height, child: child),
           child: VlcPlayer(controller: controller),
         ),
       ),
     ),
   );
+  // A first player can take over ten seconds to start where libVLC is slow
+  // to load: an x64 build emulated on ARM with no plugin cache yet.
   await pumpUntil(
     tester,
     () => controller.isAttached,
     description: 'native player attachment',
+    attempts: 160,
+  );
+  // The stalled stream follows a picture, as a real switch does. On Android
+  // it has to: libVLC builds its font database at the first picture after an
+  // install (11.5 s on the phone emulator), on the thread that opens that
+  // media, and the switch below would otherwise wait on that, not the stall.
+  await controller.setMedia(
+    VlcMediaSource(uri: await materializeAsset('$_assetRoot/video.mp4')),
+    autoPlay: true,
+  );
+  await pumpUntil(
+    tester,
+    () => controller.value.videoSize != null,
+    description: 'a first picture',
+    attempts: 240,
   );
   await controller.setMedia(
     VlcMediaSource(uri: server.playlistUri),
@@ -126,32 +234,71 @@ Future<VlcPlayerController> _playStalledStream(
     () => server.segmentRequests > 0,
     description: 'libVLC asking for the segment that stalls',
   );
+  if (picture) {
+    // The film is 320 wide, the file before it 160.
+    await pumpUntil(
+      tester,
+      () => controller.value.videoSize?.width == 320,
+      description: "the stalled stream's picture",
+      attempts: 240,
+    );
+  }
   // Give the download a moment to be well and truly stuck.
   await tester.pump(const Duration(seconds: 2));
   return controller;
 }
 
-/// A live HLS stream whose segments start downloading and then stop.
+/// Writes the keep-picture film's HLS to a folder of its own and returns its
+/// path.
+Future<String> _materializeFilm() async {
+  const root = '$_assetRoot/keep_picture/hls';
+  final directory = await Directory.systemTemp.createTemp(
+    'vlc_player_stalled_film_',
+  );
+  addTearDown(() async {
+    if (await directory.exists()) await directory.delete(recursive: true);
+  });
+  final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+  for (final asset in manifest.listAssets()) {
+    if (!asset.startsWith('$root/')) continue;
+    final data = await rootBundle.load(asset);
+    await File(
+      '${directory.path}/${asset.substring(root.length + 1)}',
+    ).writeAsBytes(data.buffer.asUint8List(), flush: true);
+  }
+  return directory.path;
+}
+
+/// A live HLS stream whose segments start downloading and then stop, or with
+/// [film] (a folder of the keep-picture film's HLS), that film, whose first
+/// segments come whole and the ones after them stop: a picture, then the stall.
 class _StallingHlsServer {
-  _StallingHlsServer._(this._isolate, this.port, this._requests);
+  _StallingHlsServer._(this._isolate, this.port, this._requests, this._path);
 
   final Isolate _isolate;
   final int port;
   final ReceivePort _requests;
+  final String _path;
   int segmentRequests = 0;
 
-  Uri get playlistUri => Uri.parse('http://127.0.0.1:$port/live.m3u8');
+  Uri get playlistUri => Uri.parse('http://127.0.0.1:$port/$_path');
 
-  static Future<_StallingHlsServer> start() async {
+  static Future<_StallingHlsServer> start({String? film}) async {
     final ready = ReceivePort();
     final requests = ReceivePort();
-    final isolate = await Isolate.spawn(_serve, <Object>[
+    final isolate = await Isolate.spawn(_serve, <Object?>[
       ready.sendPort,
       requests.sendPort,
       _stall.inMilliseconds,
+      film,
     ]);
     final port = await ready.first as int;
-    final server = _StallingHlsServer._(isolate, port, requests);
+    final server = _StallingHlsServer._(
+      isolate,
+      port,
+      requests,
+      film == null ? 'live.m3u8' : 'index.m3u8',
+    );
     requests.listen((_) => server.segmentRequests += 1);
     return server;
   }
@@ -162,16 +309,30 @@ class _StallingHlsServer {
   }
 }
 
-Future<void> _serve(List<Object> args) async {
-  final ready = args[0] as SendPort;
-  final requests = args[1] as SendPort;
-  final stall = Duration(milliseconds: args[2] as int);
+/// The film's segments that come whole: four seconds of picture.
+const Set<String> _wholeSegments = {'/seg00.ts', '/seg01.ts'};
+
+Future<void> _serve(List<Object?> args) async {
+  final ready = args[0]! as SendPort;
+  final requests = args[1]! as SendPort;
+  final stall = Duration(milliseconds: args[2]! as int);
+  final film = args[3] as String?;
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   ready.send(server.port);
 
   var sequence = 0;
   await for (final request in server) {
-    if (request.uri.path.endsWith('.m3u8')) {
+    final path = request.uri.path;
+    if (film != null &&
+        (path.endsWith('.m3u8') || _wholeSegments.contains(path))) {
+      request.response.headers.contentType = path.endsWith('.m3u8')
+          ? ContentType('application', 'vnd.apple.mpegurl')
+          : ContentType('video', 'mp2t');
+      request.response.add(await File('$film$path').readAsBytes());
+      await request.response.close();
+      continue;
+    }
+    if (path.endsWith('.m3u8')) {
       // Live: no end tag, so the playlist is fetched again as it goes.
       request.response.headers.contentType = ContentType(
         'application',

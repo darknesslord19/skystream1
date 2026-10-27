@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API 키 (선택 사항)",
   "enterKeyToOverrideDefault": "기본값을 무시할 키 입력",
   "getApiKeyFromProfile": "SubSource 프로필에서 API 키 가져오기",
-  "qualityNotGuaranteed": "화질은 보장되지 않습니다. 소스는 기본 설정에 따라 정렬되지만 재생은 공급자에 따라 달라집니다.",
+  "qualityNotGuaranteed": "화질은 보장되지 않습니다. 소스는 이 설정에 따라 정렬되며, 여러 화질을 제공하는 스트림은 이 화질 또는 그보다 낮은 가장 가까운 화질로 재생됩니다. 재생은 공급자가 실제로 제공하는 내용에 따라 달라집니다.",
   "keepSourcesOriginalOrder": "소스의 원래 순서 유지",
   "openLink": "링크 열기",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "출연: {names}",
   "actorRoleMain": "주연",
   "actorRoleSupporting": "조연",
-  "actorRoleBackground": "단역"
+  "actorRoleBackground": "단역",
+  "playerQuality": "화질",
+  "playerQualityAuto": "자동",
+  "playerQualityAutoPlaying": "자동 · {height}",
+  "networkBufferAuto": "자동(권장)",
+  "networkBufferAutoHint": "동영상마다 비트레이트와 이 기기의 메모리에 맞춰 크기를 정합니다.",
+  "devQoeLog": "QoE 로그",
+  "devQoeLogSubtitle": "재생 시간 정보를 앱 로그에 기록합니다",
+  "playerGoLive": "실시간으로 이동",
+  "playerBehindLive": "실시간보다 {time} 늦음"
 }

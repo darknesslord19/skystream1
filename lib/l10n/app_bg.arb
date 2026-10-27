@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Качеството не е гарантирано. Източниците се подреждат според това предпочитание, а поток с няколко качества се възпроизвежда в него или в най-близкото по-ниско. Възпроизвеждането зависи от това, което доставчикът реално предлага.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Актьорски състав: {names}",
   "actorRoleMain": "Главна",
   "actorRoleSupporting": "Поддържаща",
-  "actorRoleBackground": "Епизодична"
+  "actorRoleBackground": "Епизодична",
+  "playerQuality": "Качество",
+  "playerQualityAuto": "Авто",
+  "playerQualityAutoPlaying": "Авто · {height}",
+  "networkBufferAuto": "Автоматично (препоръчително)",
+  "networkBufferAutoHint": "Размерът се определя за всяко видео според битрейта му и паметта на това устройство.",
+  "devQoeLog": "Журнал за QoE",
+  "devQoeLogSubtitle": "Записва времената на възпроизвеждане в журнала на приложението",
+  "playerGoLive": "Към предаването на живо",
+  "playerBehindLive": "{time} зад живото предаване"
 }

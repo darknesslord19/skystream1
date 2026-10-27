@@ -69,6 +69,7 @@ struct VlcSnapshot {
   std::string state = "idle";
   int64_t position = 0;
   int64_t duration = 0;
+  double position_fraction = -1.0;
   int volume = 100;
   double playback_speed = 1.0;
   int64_t audio_delay = 0;
@@ -88,13 +89,25 @@ struct VlcSnapshot {
   int64_t video_width = 0;
   int64_t video_height = 0;
   double buffering_progress = -1.0;
+  // Whether a keepPicture reopen's hold is on: VlcPictureHold's decision,
+  // the same on every backend (FORK.md 30).
+  bool picture_held = false;
+  // libVLC's refused seeks, as its log said them, and the last refused time.
+  int64_t seek_refusals = 0;
+  int64_t seek_refused_at = -1;
   std::string error_code;
   std::string error_description;
+  // The order snapshots were made in: VlcPlayerCore::Snapshot() numbers each
+  // as it begins, from 1. Not part of ==, which compares what a snapshot
+  // says; see VlcSnapshotOrder (FORK.md 37).
+  uint64_t sequence = 0;
 };
 
 inline bool operator==(const VlcSnapshot& lhs, const VlcSnapshot& rhs) {
   return lhs.state == rhs.state && lhs.position == rhs.position &&
-         lhs.duration == rhs.duration && lhs.volume == rhs.volume &&
+         lhs.duration == rhs.duration &&
+         lhs.position_fraction == rhs.position_fraction &&
+         lhs.volume == rhs.volume &&
          lhs.playback_speed == rhs.playback_speed &&
          lhs.audio_delay == rhs.audio_delay &&
          lhs.subtitle_delay == rhs.subtitle_delay &&
@@ -105,6 +118,9 @@ inline bool operator==(const VlcSnapshot& lhs, const VlcSnapshot& rhs) {
          lhs.is_live == rhs.is_live && lhs.video_width == rhs.video_width &&
          lhs.video_height == rhs.video_height &&
          lhs.buffering_progress == rhs.buffering_progress &&
+         lhs.picture_held == rhs.picture_held &&
+         lhs.seek_refusals == rhs.seek_refusals &&
+         lhs.seek_refused_at == rhs.seek_refused_at &&
          lhs.error_code == rhs.error_code &&
          lhs.error_description == rhs.error_description;
 }

@@ -394,7 +394,7 @@
   "apiKeyOptionalOverride": "API कुंजी (वैकल्पिक ओवरराइड)",
   "enterKeyToOverrideDefault": "डिफ़ॉल्ट को ओवरराइड करने के लिए कुंजी दर्ज करें",
   "getApiKeyFromProfile": "SubSource प्रोफ़ाइल से अपनी API कुंजी प्राप्त करें",
-  "qualityNotGuaranteed": "गुणवत्ता की गारंटी नहीं है। स्रोतों को पसंद के अनुसार क्रमबद्ध किया जाता है, लेकिन प्लेबैक प्रदाता द्वारा वास्तव में दी जाने वाली पेशकश पर निर्भर करता है।",
+  "qualityNotGuaranteed": "गुणवत्ता की गारंटी नहीं है। स्रोत इसी पसंद के अनुसार क्रमबद्ध होते हैं, और कई गुणवत्ताओं वाली स्ट्रीम इसी गुणवत्ता में या इससे नीचे की सबसे नज़दीकी गुणवत्ता में चलती है। प्लेबैक इस पर निर्भर करता है कि प्रदाता वास्तव में क्या देता है।",
   "keepSourcesOriginalOrder": "स्रोतों को मूल क्रम में रखें",
   "openLink": "लिंक खोलें",
   "@loggedInAs": {
@@ -544,6 +544,10 @@
   "playerSourceOpening": "खुल रहा है…",
   "playerSourceNotChecked": "जाँचा नहीं गया",
   "playerReasonNoAnswer": "लिंक से कोई जवाब नहीं मिला",
+  "playerReconnecting": "फिर से कनेक्ट हो रहा है…",
+  "playerPreparingTorrent": "टोरेंट तैयार हो रहा है…",
+  "playerTorrentPeers": "{connected}/{total} पीयर · {speed} · {loaded} लोड हुआ",
+  "playerWaitingForNetwork": "नेटवर्क की प्रतीक्षा हो रही है…",
   "playerSourceUnplayable": "चल नहीं सका",
   "playerSourceCannotSeek": "सीक नहीं हो सकता",
   "playerSourceNotVideo": "वीडियो नहीं",
@@ -646,5 +650,14 @@
   "castLine": "कलाकार: {names}",
   "actorRoleMain": "मुख्य",
   "actorRoleSupporting": "सहायक",
-  "actorRoleBackground": "गौण"
+  "actorRoleBackground": "गौण",
+  "playerQuality": "गुणवत्ता",
+  "playerQualityAuto": "स्वतः",
+  "playerQualityAutoPlaying": "स्वतः · {height}",
+  "networkBufferAuto": "स्वतः (सुझाया गया)",
+  "networkBufferAutoHint": "हर वीडियो के लिए उसके बिटरेट और इस डिवाइस की मेमोरी के हिसाब से तय होता है।",
+  "devQoeLog": "QoE लॉग",
+  "devQoeLogSubtitle": "प्लेबैक के समय ऐप लॉग में लिखता है",
+  "playerGoLive": "लाइव पर जाएँ",
+  "playerBehindLive": "लाइव से {time} पीछे"
 }

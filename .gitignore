@@ -107,3 +107,6 @@ node_modules
 reports/*
 research_notes/*
 docs/superpowers/*
+
+# The QoE suite's generated media (tool/qoe/mkmedia.sh).
+tool/qoe/media/

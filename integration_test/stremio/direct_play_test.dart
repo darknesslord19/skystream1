@@ -2,7 +2,9 @@
 /// a catalog, its titles' meta and their links - the shape of CNCVerse Bridge
 /// - installed; a show's page opened; Play pressed; the episode playing, and
 /// the next one following from the same add-on; an episode card and a movie's
-/// Play too.
+/// Play too; then the show's Continue Watching row, which keeps its add-on and
+/// reopens the show's page (tapped on Home when a provider is active there:
+/// Home shows Continue Watching only then).
 ///
 /// The add-on is a fake this test serves itself, on loopback inside the app.
 /// The video is any short clip, by URL:
@@ -23,10 +25,18 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:skystream/core/addons/data/addon_repository.dart';
+import 'package:skystream/core/addons/models/addon_meta.dart'
+    show kAddonItemSource;
+import 'package:skystream/core/domain/entity/multimedia_item.dart';
+import 'package:skystream/core/extensions/extension_manager.dart';
 import 'package:skystream/core/router/app_router.dart';
+import 'package:skystream/core/storage/episode_watch_repository.dart';
+import 'package:skystream/features/home/presentation/widgets/continue_watching_card.dart';
+import 'package:skystream/features/library/presentation/history_provider.dart';
 import 'package:skystream/shared/widgets/custom_widgets.dart';
 import 'package:vlc_player/vlc_player.dart';
 
@@ -205,6 +215,23 @@ void main() {
           await whilePumping(tester, addons.remove(stale.manifestUrl));
         }
       }
+      // And left its titles in history, with the show's first episode marked
+      // watched: the show's Play would offer the episode that run stopped at.
+      final history = container.read(watchHistoryProvider.notifier);
+      for (final id in ['tsb:show', 'tsb:movie']) {
+        await whilePumping(tester, history.removeFromHistory(id));
+      }
+      await whilePumping(
+        tester,
+        container.read(episodeWatchRepositoryProvider).setManyWatched(
+          'tsb:show',
+          [
+            Episode(name: 'First', url: 'tsb:show:e1', season: 1, episode: 1),
+            Episode(name: 'Second', url: 'tsb:show:e2', season: 1, episode: 2),
+          ],
+          false,
+        ),
+      );
       await whilePumping(tester, addons.install(bridge.manifestUrl));
       step('installed ${bridge.manifestUrl}');
       try {
@@ -259,6 +286,36 @@ void main() {
         await tester.tap(_play('Play').first);
         await _playing(tester, step, 'movie');
         await _leave(tester);
+
+        // Continue Watching: the show's row, read back from history, keeps
+        // the add-on it came from and the type it published, and reopens
+        // the show's page through them.
+        final row = container
+            .read(watchHistoryProvider)
+            .firstWhere((h) => h.item.url == 'tsb:show');
+        expect(row.item.source, kAddonItemSource);
+        expect(row.item.addonUrl, bridge.manifestUrl);
+        expect(row.item.addonType, 'other');
+        step("history keeps the show's add-on and type");
+        if (container.read(activeProviderProvider) == null) {
+          step('no provider on Home, so no Continue Watching row to tap');
+        } else {
+          go(tester, const HomeRoute().location);
+          final card = find.widgetWithText(ContinueWatchingCard, 'Bridge Show');
+          await waitFor(tester, card);
+          await reveal(tester, card);
+          await tester.tap(card.first);
+          final again = find.byWidgetPredicate(
+            (w) =>
+                w is Text &&
+                RegExp(r'^(Play|Resume) E2$').hasMatch(w.data ?? ''),
+          );
+          await waitFor(tester, again);
+          step(
+            'Continue Watching reopened the show: '
+            '"${tester.widget<Text>(again.first).data}"',
+          );
+        }
         step('RESULT passed, links asked for ${bridge.streamsAsked}');
       } finally {
         await whilePumping(tester, addons.remove(bridge.manifestUrl));

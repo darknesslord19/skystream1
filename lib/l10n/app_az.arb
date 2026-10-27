@@ -600,7 +600,7 @@
   "apiKeyOptionalOverride": "API açarı (istəyə bağlı əvəzləmə)",
   "enterKeyToOverrideDefault": "Standartı əvəz etmək üçün açar daxil et",
   "getApiKeyFromProfile": "API açarını SubSource profilindən götür",
-  "qualityNotGuaranteed": "Keyfiyyətə zəmanət verilmir. Mənbələr tərcihə görə sıralanır, lakin oxutma provayderin həqiqətən təklif etdiyindən asılıdır.",
+  "qualityNotGuaranteed": "Keyfiyyətə zəmanət verilmir. Mənbələr bu seçimə görə sıralanır, bir neçə keyfiyyət təklif edən yayım isə bu keyfiyyətdə və ya ondan aşağı ən yaxın keyfiyyətdə oynayır. Oxutma provayderin həqiqətən təklif etdiyindən asılıdır.",
   "keepSourcesOriginalOrder": "Mənbələri orijinal sırada saxla",
   "openLink": "Keçidi aç",
   "diagnostics": "Diaqnostika",
@@ -718,5 +718,14 @@
   "castLine": "Aktyor heyəti: {names}",
   "actorRoleMain": "Əsas",
   "actorRoleSupporting": "Köməkçi",
-  "actorRoleBackground": "Epizodik"
+  "actorRoleBackground": "Epizodik",
+  "playerQuality": "Keyfiyyət",
+  "playerQualityAuto": "Avtomatik",
+  "playerQualityAutoPlaying": "Avtomatik · {height}",
+  "networkBufferAuto": "Avtomatik (tövsiyə olunur)",
+  "networkBufferAutoHint": "Hər video üçün onun bit sürətinə və bu cihazın yaddaşına görə ölçülür.",
+  "devQoeLog": "QoE jurnalı",
+  "devQoeLogSubtitle": "Oxutma vaxtlarını tətbiq jurnalına yazır",
+  "playerGoLive": "Canlı yayıma keç",
+  "playerBehindLive": "Canlıdan {time} geri"
 }

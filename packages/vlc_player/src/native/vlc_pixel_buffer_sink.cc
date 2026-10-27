@@ -100,10 +100,11 @@ void* VlcPixelBufferSink::Acquire(void** planes) {
   // entirely, which left the mutex locked for good and hung the next
   // CopyPixels on the raster thread.
   //
-  // Nothing needs it held. frame_buffer_ is only ever written by libVLC and
-  // only ever reallocated by Resize, and Resize runs from libVLC's own format
-  // callback on that same thread - so its address cannot move underneath a
-  // frame in flight. CopyPixels touches only the other two buffers.
+  // Nothing needs it held. frame_buffer_ is only ever written by libVLC, and
+  // Resize retires it rather than reallocating it: with a player per source,
+  // the old player's video output can still be writing the frame it locked
+  // when the new one's format arrives on another thread. CopyPixels touches
+  // only the other two buffers.
   std::lock_guard<std::mutex> lock(mutex_);
   if (frame_buffer_.empty()) {
     planes[0] = nullptr;
@@ -117,6 +118,11 @@ void VlcPixelBufferSink::Commit(void* picture) {
   if (picture == nullptr) {
     return;
   }
+  // A held output has nothing new to show; Release wakes the embedder when
+  // the hold ends.
+  if (holding_.load()) {
+    return;
+  }
   if (on_frame_available_) {
     on_frame_available_();
   }
@@ -126,17 +132,41 @@ void VlcPixelBufferSink::Release(void* picture, void* const* planes) {
   if (picture == nullptr) {
     return;
   }
-  // Skipping this - which a Detach between the callbacks now does safely -
-  // costs one dropped frame and nothing else.
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::swap(frame_buffer_, render_buffer_);
-  ++render_generation_;
+  bool wake = false;
+  {
+    // Skipping this - which a Detach between the callbacks now does safely -
+    // costs one dropped frame and nothing else.
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::swap(frame_buffer_, render_buffer_);
+    ++render_generation_;
+    if (holding_.load() && release_pending_) {
+      // The first picture finished after the hold was let go: the new
+      // media's, from where it was asked to start.
+      holding_ = false;
+      release_pending_ = false;
+      wake = true;
+    }
+  }
+  if (wake && on_frame_available_) {
+    on_frame_available_();
+  }
 }
 
 bool VlcPixelBufferSink::CopyPixels(const uint8_t** out_buffer,
                                     uint32_t* width,
                                     uint32_t* height) {
+  // The held picture of a hold that has ended, freed once the lock is let go.
+  std::vector<uint8_t> released;
   std::lock_guard<std::mutex> lock(mutex_);
+  if (holding_.load()) {
+    *out_buffer = held_.data();
+    *width = held_width_;
+    *height = held_height_;
+    return true;
+  }
+  if (!held_.empty()) {
+    released.swap(held_);
+  }
   if (render_buffer_.empty()) {
     return false;
   }
@@ -165,12 +195,44 @@ void VlcPixelBufferSink::FrameSize(uint32_t* width, uint32_t* height) const {
   *height = height_;
 }
 
+bool VlcPixelBufferSink::Hold() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (holding_.load()) {
+    // Held again for the next media, and until that one is let go: a release
+    // still pending from a media that failed, ended or was stopped before it
+    // played would end the hold at the new media's first picture, frame 0.
+    release_pending_ = false;
+    return true;
+  }
+  if (texture_generation_ == 0 || texture_buffer_.empty()) {
+    return false;
+  }
+  held_ = texture_buffer_;
+  held_width_ = width_;
+  held_height_ = height_;
+  release_pending_ = false;
+  holding_ = true;
+  return true;
+}
+
+void VlcPixelBufferSink::ReleaseHold() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (holding_.load()) {
+    release_pending_ = true;
+  }
+}
+
+bool VlcPixelBufferSink::held() const {
+  return holding_.load();
+}
+
 void VlcPixelBufferSink::Resize(uint32_t width,
                                 uint32_t height,
                                 uint32_t pitch) {
   // Whatever the *previous* format change retired. Freed here, on the way out
   // of the function, so the allocator is never called with the lock held.
   std::vector<uint8_t> released;
+  std::vector<uint8_t> released_frame;
   std::lock_guard<std::mutex> lock(mutex_);
   const auto buffer_size = static_cast<size_t>(pitch) * height;
   if (width_ == width && height_ == height && pitch_ == pitch &&
@@ -180,6 +242,14 @@ void VlcPixelBufferSink::Resize(uint32_t width,
   width_ = width;
   height_ = height;
   pitch_ = pitch;
+  // frame_buffer_ is retired too. A player per source puts two video outputs
+  // on this sink for a moment: the old player's may still be writing the
+  // frame it locked - a Detach stops its next lock, not the one in flight -
+  // when the new player's format arrives here, on that player's thread.
+  // Reallocating in place freed the block under that write. One frame of
+  // RGBA more for as long as a resolution lasts, as for texture_buffer_.
+  released_frame = std::move(retired_frame_);
+  retired_frame_ = std::move(frame_buffer_);
   frame_buffer_.assign(buffer_size, 0);
   render_buffer_.assign(buffer_size, 0);
   // texture_buffer_ is retired, never reallocated in place.
@@ -193,9 +263,8 @@ void VlcPixelBufferSink::Resize(uint32_t width,
   // when it shrinks. Only the next format change releases it, a whole
   // resolution later.
   //
-  // The other two are safe to reallocate in place. frame_buffer_ is written
-  // only by libVLC, on the thread that calls Resize; render_buffer_ never
-  // leaves this class.
+  // render_buffer_ is safe to reallocate in place: it never leaves this
+  // class.
   released = std::move(retired_);
   retired_ = std::move(texture_buffer_);
   texture_buffer_.assign(buffer_size, 0);
@@ -243,6 +312,11 @@ const uint8_t* VlcPixelBufferSink::RetiredBufferDataForTesting() const {
 size_t VlcPixelBufferSink::RetiredBufferSizeForTesting() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return retired_.size();
+}
+
+const uint8_t* VlcPixelBufferSink::RetiredFrameBufferDataForTesting() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return retired_frame_.empty() ? nullptr : retired_frame_.data();
 }
 
 uint64_t VlcPixelBufferSink::RenderGenerationForTesting() const {

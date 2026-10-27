@@ -1927,23 +1927,33 @@ void main() {
       await _snapshot(tester, state: 'paused', position: 2000);
     });
 
-    testWidgets('a rebuffer keeps the pause glyph', (tester) async {
-      await _pumpControls(tester);
+    testWidgets('a buffering report alone shows no spinner: the stalled clock '
+        'does, and the pause glyph stays', (tester) async {
+      // The touch build, whose centre glyph is the one that folds away under
+      // the spinner; a television's pause button sits in the bar instead.
+      final controller = await _pumpControls(tester, isTv: false);
       await _snapshot(tester, position: 1000);
       expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
 
       // Same position as the last tick: an advancing one would be the
       // healthy-playback flap the value layer corrects back to `playing`.
       await _snapshot(tester, state: 'buffering', position: 1000);
+      expect(
+        find.byType(PlayerBufferingIndicator),
+        findsNothing,
+        reason: 'one rule on every platform: a frozen clock, not the state',
+      );
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+
+      await tester.pump(controller.stallIndicatorDelay);
       expect(find.byType(PlayerBufferingIndicator), findsOneWidget);
       expect(
         find.byIcon(Icons.pause_rounded),
-        findsOneWidget,
-        reason: 'playback will resume, so the button still offers pause',
+        findsNothing,
+        reason: 'the glyph folds away while the spinner is up',
       );
-      expect(find.byIcon(Icons.play_arrow_rounded), findsNothing);
 
-      // The engine catches up: the spinner goes and the glyph never moved.
+      // The engine catches up: the spinner goes and the glyph comes back.
       await _snapshot(tester, position: 2000);
       expect(find.byType(PlayerBufferingIndicator), findsNothing);
       expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
@@ -1952,6 +1962,50 @@ void main() {
       // checks for pending timers before the harness's tearDown disposes it.
       // Pause parks the clock.
       await _snapshot(tester, state: 'paused', position: 2000);
+    });
+
+    testWidgets('no spinner while the viewer drags the bar; a committed seek '
+        'gets its first second', (tester) async {
+      // A controller of the test's own, so the bars stay up for the drag.
+      final chrome = ChromeVisibilityController(isPlaying: () => true);
+      final controller = await _pumpControls(
+        tester,
+        isTv: false,
+        chrome: chrome,
+      );
+      await _snapshot(tester, position: 10000);
+      await _snapshot(tester, position: 10000);
+      await tester.pump(controller.stallIndicatorDelay);
+      expect(find.byType(PlayerBufferingIndicator), findsOneWidget);
+
+      chrome.poke();
+      await tester.pump();
+      final bar = tester.getRect(find.byType(PlayerSeekBar));
+      final drag = await tester.startGesture(bar.centerLeft + const Offset(20, 0));
+      await tester.pump(const Duration(milliseconds: 50));
+      await drag.moveBy(const Offset(60, 0));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(
+        find.byType(PlayerBufferingIndicator),
+        findsNothing,
+        reason: 'the bar shows the target while the viewer chooses it',
+      );
+
+      await drag.up();
+      await tester.pump();
+      expect(
+        find.byType(PlayerBufferingIndicator),
+        findsNothing,
+        reason: 'the seek just committed has a second to land',
+      );
+
+      await tester.pump(controller.stallIndicatorDelay);
+      expect(find.byType(PlayerBufferingIndicator), findsOneWidget);
+
+      await _snapshot(tester, state: 'paused', position: 10000);
+      await tester.pumpWidget(const SizedBox.shrink());
+      // The screen owns this controller in the app: stop its hide clock here.
+      chrome.dispose();
     });
   });
 

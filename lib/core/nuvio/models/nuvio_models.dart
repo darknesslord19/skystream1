@@ -631,7 +631,7 @@ class NuvioStreamResult {
       scraperName: scraperName,
       title: title,
       name: name,
-      url: url ?? 'magnet:?xt=urn:btih:$infoHash',
+      url: url ?? _magnetOf(infoHash, _asInt(field('fileIdx'))),
       quality: quality,
       size: size,
       language: _cleanOrNull(field('language')?.toString()),
@@ -754,6 +754,11 @@ String? _sizeFromBytes(dynamic raw) {
   }
   return '${value.toStringAsFixed(value >= 10 || unit == 0 ? 0 : 1)} ${units[unit]}';
 }
+
+/// A scraper's torrent as a magnet, with the file it named as BEP 53's
+/// select-only, so a season pack plays that episode.
+String _magnetOf(String? infoHash, int? fileIdx) =>
+    'magnet:?xt=urn:btih:$infoHash${fileIdx == null ? '' : '&so=$fileIdx'}';
 
 int? _asInt(dynamic value) {
   if (value is num) return value.toInt();

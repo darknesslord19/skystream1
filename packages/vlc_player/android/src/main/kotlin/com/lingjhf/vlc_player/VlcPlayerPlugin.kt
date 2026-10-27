@@ -27,6 +27,7 @@ class VlcPlayerPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         this.binding = binding
+        VlcFontWarmup.startIfNeeded(binding.applicationContext)
         val messenger = binding.binaryMessenger
         channel = MethodChannel(messenger, CHANNEL_NAME).also {
             it.setMethodCallHandler(this)
@@ -100,7 +101,16 @@ class VlcPlayerPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
                     result.error("invalid_args", "A non-negative startPosition is required.", null)
                     return
                 }
-                player.setSource(uri, httpHeaders, mediaOptions, startPosition, autoPlay, result)
+                val keepPicture = call.argument<Boolean>("keepPicture") ?: false
+                player.setSource(
+                    uri,
+                    httpHeaders,
+                    mediaOptions,
+                    startPosition,
+                    keepPicture,
+                    autoPlay,
+                    result,
+                )
             }
             "play" -> player.play(result)
             "pause" -> player.pause(result)
@@ -112,6 +122,14 @@ class VlcPlayerPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Activity
                     return
                 }
                 player.seekTo(position, result)
+            }
+            "seekToFraction" -> {
+                val fraction = call.argument<Number>("fraction")?.toDouble()
+                if (fraction == null || fraction.isNaN() || fraction < 0.0 || fraction > 1.0) {
+                    result.error("invalid_args", "A fraction within 0..1 is required.", null)
+                    return
+                }
+                player.seekToFraction(fraction.toFloat(), result)
             }
             "setFit" -> {
                 val fit = call.argument<String>("fit")

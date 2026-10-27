@@ -9,6 +9,7 @@
 #include "vlc_player_core.h"
 #include "vlc_player_plugin_private.h"
 #include "../../test/native/vlc_player_core_test_suite.h"
+#include "../../test/native/vlc_snapshot_order_test_suite.h"
 #include "../../test/native/vlc_subtitle_look_test_suite.h"
 
 // This demonstrates a simple unit test of the C portion of this plugin's

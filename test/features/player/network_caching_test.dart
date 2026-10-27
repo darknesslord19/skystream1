@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart'
-    show kNetworkCachingMs;
+import 'package:skystream/core/domain/entity/multimedia_item.dart';
+import 'package:skystream/features/player/domain/media_options.dart'
+    show kLiveCachingMs, kVodCachingMs;
 
 import 'fake_vlc_engine.dart';
 import 'vlc_screen_harness.dart';
@@ -16,7 +17,9 @@ import 'vlc_screen_harness.dart';
 /// at once.
 ///
 /// The number is therefore a user-visible latency budget, not a tuning knob,
-/// and these tests exist to stop it drifting back up.
+/// and these tests exist to stop it drifting back up. Each media carries its
+/// own (spec 1.1): libvlc-android adds `:network-caching=1500` to any media
+/// that names none, so only a media option makes Android follow the app.
 void main() {
   late FakeVlcEngine engine;
 
@@ -33,21 +36,67 @@ void main() {
     return (arguments['options'] as List<Object?>).cast<String>();
   }
 
-  test('the caching interval stays inside a tolerable switch delay', () {
-    // The bound is the point of the test. Anything above a few seconds is felt
-    // directly as dead audio after a track change; 60000 was the shipped value
-    // and produced a full minute of silence.
-    expect(kNetworkCachingMs, lessThanOrEqualTo(5000));
-    expect(kNetworkCachingMs, greaterThanOrEqualTo(1000));
+  /// The options the last media was opened with.
+  List<String> lastMediaOptions() {
+    final open = engine.callsTo('setSource').last;
+    final arguments = open.arguments as Map<Object?, Object?>;
+    return (arguments['mediaOptions'] as List<Object?>).cast<String>();
+  }
+
+  test('the caching intervals stay inside a tolerable switch delay', () {
+    // 1 s on demand starts a file at 8 Mbit/s in 1.5 s instead of 2.6 s; a
+    // live feed, which can't read ahead, gets half a second more for jitter.
+    expect(kVodCachingMs, 1000);
+    expect(kLiveCachingMs, 1500);
   });
 
-  testWidgets('libVLC is created with the bounded caching interval', variant: texturePlatform, (
+  testWidgets('libVLC is created with the on-demand interval', variant: texturePlatform, (
     tester,
   ) async {
     await pumpPlayer(tester);
     await settle(tester);
 
-    expect(createdOptions(), contains('--network-caching=$kNetworkCachingMs'));
+    expect(createdOptions(), contains('--network-caching=$kVodCachingMs'));
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a film carries the on-demand interval', variant: texturePlatform, (
+    tester,
+  ) async {
+    await pumpPlayer(tester);
+    await settle(tester);
+
+    expect(
+      lastMediaOptions().where((o) => o.startsWith(':network-caching=')),
+      [':network-caching=$kVodCachingMs'],
+    );
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a live feed carries the live interval, and live-caching is gone', variant: texturePlatform, (
+    tester,
+  ) async {
+    await pumpPlayer(
+      tester,
+      item: MultimediaItem(
+        title: 'Channel',
+        url: 'https://example.com/live.ts',
+        posterUrl: '',
+        contentType: MultimediaContentType.livestream,
+        provider: 'Remote',
+      ),
+      videoUrl: 'https://example.com/live.ts',
+    );
+    await settle(tester);
+
+    expect(lastMediaOptions(), contains(':network-caching=$kLiveCachingMs'));
+    expect(
+      lastMediaOptions().where((o) => o.contains('live-caching')),
+      isEmpty,
+      reason: 'live-caching only ever applied to capture devices',
+    );
 
     await tester.pumpWidget(const SizedBox());
   });

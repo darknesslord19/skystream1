@@ -122,8 +122,10 @@ Future<void> pumpUntil(
   throw TestFailure('Timed out waiting for $what. On screen: $texts');
 }
 
+/// [finder] is described, not printed: printing a finder lists its last results, and for one kept across tests
+/// those can be a previous app's unmounted elements, which throw (P1 Part 4's TV run).
 Future<void> waitFor(WidgetTester tester, Finder finder, {Duration timeout = const Duration(minutes: 2)}) =>
-    pumpUntil(tester, () => finder.evaluate().isNotEmpty, what: '$finder', timeout: timeout);
+    pumpUntil(tester, () => finder.evaluate().isNotEmpty, what: finder.describeMatch(Plurality.many), timeout: timeout);
 
 /// Scrolls the first scrollable until [finder] is built and visible: lists build lazily.
 Future<void> reveal(WidgetTester tester, Finder finder) async {

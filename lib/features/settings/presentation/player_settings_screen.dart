@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers/device_info_provider.dart';
-import '../../player/domain/network_buffer.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../core/utils/stream_quality_sorter.dart';
@@ -29,12 +28,6 @@ class PlayerSettingsScreen extends ConsumerWidget {
         ref.watch(playerSettingsProvider).asData?.value ??
         const PlayerSettings();
 
-    // The size in force: what the viewer chose, or what this device starts
-    // with. Resolved here so the row and the dialog agree with the player.
-    final bufferMb = resolveNetworkBufferMb(
-      playerSettings.networkBufferMb,
-      profile?.tier ?? DeviceTier.standard,
-    );
 
     // Whether this device has a touchscreen, which is the only thing the four
     // gesture rows below depend on: a swipe, a drag and a double-tap are the
@@ -165,9 +158,15 @@ class PlayerSettingsScreen extends ConsumerWidget {
                   SettingsTile(
                     icon: Icons.download_for_offline_rounded,
                     title: l10n.networkBuffer,
-                    subtitle: formatNetworkBuffer(bufferMb),
-                    onTap: () =>
-                        showNetworkBufferDialog(context, ref, bufferMb),
+                    // Auto says what it does; a picked size says itself.
+                    subtitle: playerSettings.bufferOverrideMb == null
+                        ? l10n.networkBufferAutoHint
+                        : formatNetworkBuffer(playerSettings.bufferOverrideMb!),
+                    onTap: () => showNetworkBufferDialog(
+                      context,
+                      ref,
+                      playerSettings.bufferOverrideMb,
+                    ),
                   ),
                   SettingsTile(
                     icon: Icons.aspect_ratio_rounded,

@@ -39,8 +39,8 @@ void main() {
 
   test('the full screen flags are gone from lib/', () {
     // Named one by one rather than matching `--anything`: libVLC takes its own
-    // options as strings of the same shape (`--http-reconnect` in
-    // vlc_player_screen.dart), and those are arguments to the media engine,
+    // options as strings of the same shape (`--swscale-mode=0` in
+    // media_options.dart), and those are arguments to the media engine,
     // not flags read off this process.
     final retired = RegExp(
       r"'--(full-screen|fullscreen|big-picture|bigpicture)'",

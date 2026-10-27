@@ -22,8 +22,12 @@ const String _source =
 ///
 /// A nullable field cannot be *cleared* through `T? x` — passing null is
 /// indistinguishable from passing nothing — so [PlayerSettings.preferredPlayer]
-/// takes a companion flag instead. That is a deliberate pattern, not debris.
-const Set<String> _fieldlessByDesign = <String>{'clearPreferredPlayer'};
+/// and [PlayerSettings.bufferOverrideMb] take a companion flag instead. That is
+/// a deliberate pattern, not debris.
+const Set<String> _fieldlessByDesign = <String>{
+  'clearPreferredPlayer',
+  'clearBufferOverride',
+};
 
 /// Every read refuses, the way a Linux box with no libsecret does.
 class _BrokenCredentials extends SecureTokenStorage {
@@ -896,6 +900,107 @@ void main() {
       expect(changed.subtitleFont, SubtitleFont.serif);
       expect(changed.subtitleTextOpacity, 1.0);
       expect(changed.subtitleEncoding, isEmpty);
+    });
+  });
+
+  // Review Focus 3: every install had a size in the old key, most of them the
+  // tier default it was nudged into, so the old key is never read again.
+  group('the buffer size', () {
+    late Directory dir;
+    late StorageService storage;
+
+    setUp(() async {
+      dir = Directory.systemTemp.createTempSync('player_settings_buffer');
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (MethodCall call) async => dir.path,
+      );
+      storage = StorageService();
+      await storage.init();
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    });
+
+    tearDown(() async {
+      await Hive.close();
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        null,
+      );
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    ProviderContainer boot() {
+      final ProviderContainer container = ProviderContainer(
+        overrides: [storageServiceProvider.overrideWithValue(storage)],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    test('is Auto on a fresh install', () async {
+      expect(
+        (await boot().read(playerSettingsProvider.future)).bufferOverrideMb,
+        isNull,
+      );
+    });
+
+    test('a size chosen under the old setting is not read: Auto', () async {
+      await storage.setPlayerSetting('player_network_buffer_mb', 512);
+      expect(
+        (await boot().read(playerSettingsProvider.future)).bufferOverrideMb,
+        isNull,
+      );
+    });
+
+    test('a size survives the next launch, and Auto clears it', () async {
+      final ProviderContainer first = boot();
+      await first.read(playerSettingsProvider.future);
+      await first
+          .read(playerSettingsProvider.notifier)
+          .setBufferOverrideMb(256);
+
+      expect(
+        first.read(playerSettingsProvider).requireValue.bufferOverrideMb,
+        256,
+        reason: 'the setter has to move the state, not only the box',
+      );
+      expect(storage.getPlayerSetting<int>('player_buffer_override_mb'), 256);
+
+      final ProviderContainer second = boot();
+      expect(
+        (await second.read(playerSettingsProvider.future)).bufferOverrideMb,
+        256,
+      );
+
+      await second
+          .read(playerSettingsProvider.notifier)
+          .setBufferOverrideMb(null);
+      expect(
+        second.read(playerSettingsProvider).requireValue.bufferOverrideMb,
+        isNull,
+      );
+      expect(
+        storage.getPlayerSetting<int>('player_buffer_override_mb'),
+        isNull,
+      );
+    });
+
+    test('a size outside the choices is held to them', () async {
+      final ProviderContainer container = boot();
+      await container.read(playerSettingsProvider.future);
+      await container
+          .read(playerSettingsProvider.notifier)
+          .setBufferOverrideMb(4096);
+      expect(storage.getPlayerSetting<int>('player_buffer_override_mb'), 1024);
+    });
+
+    test('copyWith carries it, and only the flag clears it', () {
+      const PlayerSettings chosen = PlayerSettings(bufferOverrideMb: 512);
+      expect(chosen.copyWith(subtitleSize: 30).bufferOverrideMb, 512);
+      expect(
+        chosen.copyWith(clearBufferOverride: true).bufferOverrideMb,
+        isNull,
+      );
     });
   });
 }

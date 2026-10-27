@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Chất lượng không được đảm bảo. Các nguồn được sắp xếp theo lựa chọn này, và luồng có nhiều chất lượng sẽ phát ở chất lượng này hoặc mức gần nhất bên dưới. Việc phát phụ thuộc vào những gì nhà cung cấp thực sự cung cấp.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Diễn viên: {names}",
   "actorRoleMain": "Chính",
   "actorRoleSupporting": "Phụ",
-  "actorRoleBackground": "Quần chúng"
+  "actorRoleBackground": "Quần chúng",
+  "playerQuality": "Chất lượng",
+  "playerQualityAuto": "Tự động",
+  "playerQualityAutoPlaying": "Tự động · {height}",
+  "networkBufferAuto": "Tự động (khuyên dùng)",
+  "networkBufferAutoHint": "Được định cỡ cho từng video theo tốc độ bit của nó và bộ nhớ của thiết bị này.",
+  "devQoeLog": "Nhật ký QoE",
+  "devQoeLogSubtitle": "Ghi thời gian phát vào nhật ký ứng dụng",
+  "playerGoLive": "Đến trực tiếp",
+  "playerBehindLive": "Chậm {time} so với trực tiếp"
 }

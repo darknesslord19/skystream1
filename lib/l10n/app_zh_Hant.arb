@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API 密钥（可选覆盖）",
   "enterKeyToOverrideDefault": "输入密钥以覆盖默认设置",
   "getApiKeyFromProfile": "从 SubSource 个人资料获取您的 API 密钥",
-  "qualityNotGuaranteed": "不保证质量。来源按偏好排序，但播放取决于提供商实际提供的内容。",
+  "qualityNotGuaranteed": "不保證畫質。來源會依此偏好排序，提供多種畫質的串流會以此畫質或低於它的最接近畫質播放。實際播放取決於提供者真正提供的內容。",
   "keepSourcesOriginalOrder": "保持来源原始顺序",
   "openLink": "打开链接",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "演員：{names}",
   "actorRoleMain": "主要",
   "actorRoleSupporting": "配角",
-  "actorRoleBackground": "路人"
+  "actorRoleBackground": "路人",
+  "playerQuality": "畫質",
+  "playerQualityAuto": "自動",
+  "playerQualityAutoPlaying": "自動 · {height}",
+  "networkBufferAuto": "自動（建議）",
+  "networkBufferAutoHint": "依每部影片的位元率與這台裝置的記憶體決定大小。",
+  "devQoeLog": "QoE 記錄",
+  "devQoeLogSubtitle": "將播放時間寫入應用程式記錄",
+  "playerGoLive": "前往直播",
+  "playerBehindLive": "落後直播 {time}"
 }

@@ -70,6 +70,20 @@ void main() {
       expect(first.hashCode, second.hashCode);
     });
 
+    test('is live only when it says so, and that is part of its value', () {
+      final onDemand = VlcMediaSource(
+        uri: Uri.parse('https://example.com/index.m3u8'),
+      );
+      final live = VlcMediaSource(
+        uri: Uri.parse('https://example.com/index.m3u8'),
+        isLive: true,
+      );
+
+      expect(onDemand.isLive, isFalse);
+      expect(live.isLive, isTrue);
+      expect(live, isNot(onDemand));
+    });
+
     test('formats source details for diagnostics', () {
       final source = VlcMediaSource(
         uri: Uri.parse('https://example.com/video.mp4'),
@@ -83,7 +97,7 @@ void main() {
         'VlcMediaSource(uri: https://example.com/video.mp4, '
         'httpHeaders: {Authorization: Bearer token}, '
         'mediaOptions: [:network-caching=1000], '
-        'startPosition: 0:00:03.000000)',
+        'startPosition: 0:00:03.000000, isLive: false)',
       );
     });
   });

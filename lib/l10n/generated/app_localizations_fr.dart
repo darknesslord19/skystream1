@@ -1398,7 +1398,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'La qualité n\'est pas garantie. Les sources sont triées par préférence mais dépendent de l\'offre du fournisseur.';
+      'La qualité n\'est pas garantie. Les sources sont triées selon cette préférence, et un flux qui propose plusieurs qualités est lu dans celle-ci ou la plus proche en dessous. La lecture dépend de ce que le fournisseur propose réellement.';
 
   @override
   String get keepSourcesOriginalOrder => 'Garder l\'ordre original des sources';
@@ -1527,6 +1527,16 @@ class AppLocalizationsFr extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1571,6 +1581,9 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2402,4 +2415,37 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Figurant';
+
+  @override
+  String get playerQuality => 'Qualité';
+
+  @override
+  String get playerQualityAuto => 'Auto';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Auto · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Auto (recommandé)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Dimensionné pour chaque vidéo selon son débit et la mémoire de cet appareil.';
+
+  @override
+  String get devQoeLog => 'Journal QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Écrit les temps de lecture dans le journal de l\'application';
+
+  @override
+  String get playerGoLive => 'Revenir au direct';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time de retard sur le direct';
+  }
 }

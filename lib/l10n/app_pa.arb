@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "ਗੁਣਵੱਤਾ ਦੀ ਗਰੰਟੀ ਨਹੀਂ ਹੈ। ਸਰੋਤ ਇਸ ਪਸੰਦ ਅਨੁਸਾਰ ਛਾਂਟੇ ਜਾਂਦੇ ਹਨ, ਅਤੇ ਕਈ ਗੁਣਵੱਤਾਵਾਂ ਵਾਲੀ ਸਟ੍ਰੀਮ ਇਸੇ ਗੁਣਵੱਤਾ ਵਿੱਚ ਜਾਂ ਇਸ ਤੋਂ ਹੇਠਾਂ ਸਭ ਤੋਂ ਨੇੜਲੀ ਗੁਣਵੱਤਾ ਵਿੱਚ ਚੱਲਦੀ ਹੈ। ਪਲੇਬੈਕ ਇਸ 'ਤੇ ਨਿਰਭਰ ਕਰਦਾ ਹੈ ਕਿ ਪ੍ਰਦਾਤਾ ਅਸਲ ਵਿੱਚ ਕੀ ਦਿੰਦਾ ਹੈ।",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "ਕਲਾਕਾਰ: {names}",
   "actorRoleMain": "ਮੁੱਖ",
   "actorRoleSupporting": "ਸਹਾਇਕ",
-  "actorRoleBackground": "ਗੌਣ"
+  "actorRoleBackground": "ਗੌਣ",
+  "playerQuality": "ਗੁਣਵੱਤਾ",
+  "playerQualityAuto": "ਆਟੋ",
+  "playerQualityAutoPlaying": "ਆਟੋ · {height}",
+  "networkBufferAuto": "ਆਟੋ (ਸਿਫ਼ਾਰਸ਼ੀ)",
+  "networkBufferAutoHint": "ਹਰ ਵੀਡੀਓ ਲਈ ਉਸਦੇ ਬਿਟਰੇਟ ਅਤੇ ਇਸ ਡਿਵਾਈਸ ਦੀ ਮੈਮਰੀ ਮੁਤਾਬਕ ਆਕਾਰ ਤੈਅ ਹੁੰਦਾ ਹੈ।",
+  "devQoeLog": "QoE ਲੌਗ",
+  "devQoeLogSubtitle": "ਪਲੇਬੈਕ ਦੇ ਸਮੇਂ ਐਪ ਲੌਗ ਵਿੱਚ ਲਿਖਦਾ ਹੈ",
+  "playerGoLive": "ਲਾਈਵ 'ਤੇ ਜਾਓ",
+  "playerBehindLive": "ਲਾਈਵ ਤੋਂ {time} ਪਿੱਛੇ"
 }

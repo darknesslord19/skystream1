@@ -254,6 +254,131 @@ TEST(VlcPixelBufferSink, RetirementKeepsOnlyTheMostRecentBuffer) {
   EXPECT_NE(sink.RetiredBufferDataForTesting(), held);
 }
 
+// The embedder keeps being handed the picture on screen while libVLC decodes
+// the next media behind it, frame 0 included.
+TEST(VlcPixelBufferSink, AHoldKeepsHandingOutThePictureOnScreen) {
+  int wakes = 0;
+  VlcPixelBufferSink sink([&wakes] { ++wakes; });
+  sink.ResizeForTesting(2, 2, 8);
+  sink.SimulateFrameForTesting(40);
+  const uint8_t* shown = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(sink.CopyPixels(&shown, &width, &height));
+
+  ASSERT_TRUE(sink.Hold());
+  EXPECT_TRUE(sink.held());
+  sink.SimulateFrameForTesting(0);
+  sink.Commit(&sink);
+
+  const uint8_t* during = nullptr;
+  ASSERT_TRUE(sink.CopyPixels(&during, &width, &height));
+  EXPECT_EQ(during[0], 40u);
+  EXPECT_EQ(wakes, 0) << "nothing new to show while held";
+}
+
+// The new media may come at another size; the held picture keeps its own.
+TEST(VlcPixelBufferSink, AHoldSurvivesANewFormat) {
+  VlcPixelBufferSink sink([] {});
+  sink.ResizeForTesting(4, 2, 16);
+  sink.SimulateFrameForTesting(50);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  ASSERT_TRUE(sink.Hold());
+
+  sink.ResizeForTesting(2, 2, 8);
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(width, 4u);
+  EXPECT_EQ(height, 2u);
+  EXPECT_EQ(pixels[0], 50u);
+}
+
+// A release lets go at the next picture libVLC finishes, never at once: a
+// time report can come a moment before the first picture at the new place,
+// and releasing then would hand out the last one decoded - frame 0.
+TEST(VlcPixelBufferSink, AReleaseLetsGoAtTheNextFinishedPicture) {
+  int wakes = 0;
+  VlcPixelBufferSink sink([&wakes] { ++wakes; });
+  sink.ResizeForTesting(2, 2, 8);
+  sink.SimulateFrameForTesting(40);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  ASSERT_TRUE(sink.Hold());
+  sink.SimulateFrameForTesting(0);
+
+  sink.ReleaseHold();
+  EXPECT_TRUE(sink.held());
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 40u) << "frame 0 never shows";
+
+  void* planes[1] = {nullptr};
+  void* picture = sink.Acquire(planes);
+  ASSERT_NE(picture, nullptr);
+  static_cast<uint8_t*>(planes[0])[0] = 77;
+  sink.Release(picture, planes);
+  EXPECT_FALSE(sink.held());
+  EXPECT_EQ(wakes, 1) << "the embedder is woken for the new picture";
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 77u);
+}
+
+// A hold let go with no picture after it - the media failed, ended or was
+// stopped before it played - and taken again for the next media stays up
+// until that media is let go too: the next picture decoded is its frame 0
+// (SkyStream's whole-part review of P1 Part 2, 2026-10-15).
+TEST(VlcPixelBufferSink, AHoldTakenAgainAfterALetGoWithNoPictureStaysUp) {
+  VlcPixelBufferSink sink([] {});
+  sink.ResizeForTesting(2, 2, 8);
+  sink.SimulateFrameForTesting(40);
+  const uint8_t* pixels = nullptr;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  ASSERT_TRUE(sink.Hold());
+  sink.ReleaseHold();
+
+  ASSERT_TRUE(sink.Hold());
+  void* planes[1] = {nullptr};
+  void* picture = sink.Acquire(planes);
+  ASSERT_NE(picture, nullptr);
+  static_cast<uint8_t*>(planes[0])[0] = 0;
+  sink.Release(picture, planes);
+
+  EXPECT_TRUE(sink.held());
+  ASSERT_TRUE(sink.CopyPixels(&pixels, &width, &height));
+  EXPECT_EQ(pixels[0], 40u) << "frame 0 never shows";
+}
+
+// A player per source puts two video outputs on one sink for a moment: the
+// old one may still be writing the frame it locked when the new one's format
+// arrives. The block it writes into outlives that format change.
+TEST(VlcPixelBufferSink, AFrameInFlightKeepsItsBufferThroughAFormatChange) {
+  VlcPixelBufferSink sink([] {});
+  sink.ResizeForTesting(2, 2, 8);
+  void* planes[1] = {nullptr};
+  ASSERT_NE(sink.Acquire(planes), nullptr);
+  auto* writing = static_cast<uint8_t*>(planes[0]);
+
+  sink.ResizeForTesting(1920, 1080, 1920 * 4);
+
+  EXPECT_EQ(sink.RetiredFrameBufferDataForTesting(), writing);
+  // Under a sanitizer this write is the use-after-free itself.
+  std::memset(writing, 9, 16);
+  EXPECT_EQ(writing[15], 9u);
+}
+
+TEST(VlcPixelBufferSink, NothingToHoldBeforeTheFirstPicture) {
+  VlcPixelBufferSink sink([] {});
+  EXPECT_FALSE(sink.Hold());
+  sink.ResizeForTesting(2, 2, 8);
+  EXPECT_FALSE(sink.Hold()) << "a format with no picture handed out yet";
+  EXPECT_FALSE(sink.held());
+}
+
 }  // namespace test
 }  // namespace vlc_player
 

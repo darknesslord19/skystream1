@@ -1350,7 +1350,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      '画質は保証されません。ソースは好み順に並べられますが、再生はプロバイダーの提供状況によります。';
+      '画質は保証されません。ソースはこの設定の順に並び、複数の画質がある配信はこの画質、またはそれ以下で最も近い画質で再生されます。再生はプロバイダーが実際に提供する内容によります。';
 
   @override
   String get keepSourcesOriginalOrder => 'ソースの元の順序を維持する';
@@ -1478,6 +1478,16 @@ class AppLocalizationsJa extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1522,6 +1532,9 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2353,4 +2366,35 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'モブ';
+
+  @override
+  String get playerQuality => '画質';
+
+  @override
+  String get playerQualityAuto => '自動';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return '自動 · $height';
+  }
+
+  @override
+  String get networkBufferAuto => '自動（推奨）';
+
+  @override
+  String get networkBufferAutoHint => '動画ごとに、そのビットレートとこのデバイスのメモリに合わせてサイズを決めます。';
+
+  @override
+  String get devQoeLog => 'QoE ログ';
+
+  @override
+  String get devQoeLogSubtitle => '再生のタイミングをアプリのログに書き込みます';
+
+  @override
+  String get playerGoLive => 'ライブに戻る';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'ライブから $time 遅れ';
+  }
 }

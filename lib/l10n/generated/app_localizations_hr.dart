@@ -1375,7 +1375,7 @@ class AppLocalizationsHr extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Kvaliteta nije zajamčena. Izvori se slažu prema ovoj postavci, a stream s više kvaliteta reproducira se u njoj ili u najbližoj nižoj. Reprodukcija ovisi o tome što pružatelj stvarno nudi.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1503,6 +1503,16 @@ class AppLocalizationsHr extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1547,6 +1557,9 @@ class AppLocalizationsHr extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2379,4 +2392,37 @@ class AppLocalizationsHr extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Epizodna';
+
+  @override
+  String get playerQuality => 'Kvaliteta';
+
+  @override
+  String get playerQualityAuto => 'Automatski';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automatski · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automatski (preporučeno)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Veličina se određuje za svaki videozapis prema njegovoj brzini prijenosa i memoriji ovog uređaja.';
+
+  @override
+  String get devQoeLog => 'QoE zapisnik';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Zapisuje vremena reprodukcije u zapisnik aplikacije';
+
+  @override
+  String get playerGoLive => 'Idi na uživo';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time iza prijenosa uživo';
+  }
 }

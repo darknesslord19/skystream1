@@ -1363,7 +1363,7 @@ class AppLocalizationsHe extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'האיכות אינה מובטחת. המקורות ממוינים לפי העדפה זו, וזרם שמציע כמה איכויות מתנגן בה או באיכות הקרובה ביותר מתחתיה. ההפעלה תלויה במה שהספק מציע בפועל.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1491,6 +1491,16 @@ class AppLocalizationsHe extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1535,6 +1545,9 @@ class AppLocalizationsHe extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2367,4 +2380,36 @@ class AppLocalizationsHe extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'ניצב';
+
+  @override
+  String get playerQuality => 'איכות';
+
+  @override
+  String get playerQualityAuto => 'אוטומטי';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'אוטומטי · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'אוטומטי (מומלץ)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'הגודל נקבע לכל סרטון לפי קצב הסיביות שלו והזיכרון של מכשיר זה.';
+
+  @override
+  String get devQoeLog => 'יומן QoE';
+
+  @override
+  String get devQoeLogSubtitle => 'כותב את זמני הניגון ביומן האפליקציה';
+
+  @override
+  String get playerGoLive => 'מעבר לשידור החי';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time מאחורי השידור החי';
+  }
 }

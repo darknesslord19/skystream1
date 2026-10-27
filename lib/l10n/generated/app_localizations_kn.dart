@@ -1393,7 +1393,7 @@ class AppLocalizationsKn extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'ಗುಣಮಟ್ಟದ ಭರವಸೆ ಇಲ್ಲ. ಮೂಲಗಳನ್ನು ಆದ್ಯತೆಯ ಮೇರೆಗೆ ವಿಂಗಡಿಸಲಾಗಿದೆ, ಆದರೆ ಪ್ಲೇಬ್ಯಾಕ್ ಪ್ರದಾನಿಯು ವಾಸ್ತವವಾಗಿ ಏನು ನೀಡುತ್ತಾರೆ ಎಂಬುದರ ಮೇಲೆ ಅವಲಂಬಿತವಾಗಿರುತ್ತದೆ.';
+      'ಗುಣಮಟ್ಟದ ಭರವಸೆ ಇಲ್ಲ. ಮೂಲಗಳನ್ನು ಈ ಆದ್ಯತೆಯ ಪ್ರಕಾರ ವಿಂಗಡಿಸಲಾಗುತ್ತದೆ, ಮತ್ತು ಹಲವು ಗುಣಮಟ್ಟಗಳಿರುವ ಸ್ಟ್ರೀಮ್ ಈ ಗುಣಮಟ್ಟದಲ್ಲಿ ಅಥವಾ ಇದಕ್ಕಿಂತ ಕಡಿಮೆ ಇರುವ ಅತಿ ಹತ್ತಿರದ ಗುಣಮಟ್ಟದಲ್ಲಿ ಪ್ಲೇ ಆಗುತ್ತದೆ. ಪ್ಲೇಬ್ಯಾಕ್ ಪೂರೈಕೆದಾರರು ವಾಸ್ತವವಾಗಿ ಏನು ನೀಡುತ್ತಾರೆ ಎಂಬುದನ್ನು ಅವಲಂಬಿಸಿರುತ್ತದೆ.';
 
   @override
   String get keepSourcesOriginalOrder => 'ಮೂಲಗಳನ್ನು ಮೂಲ ಕ್ರಮದಲ್ಲಿ ಇರಿಸಿ';
@@ -1518,7 +1518,17 @@ class AppLocalizationsKn extends AppLocalizations {
   }
 
   @override
-  String get playerPreparingTorrent => 'Preparing torrent…';
+  String get playerPreparingTorrent => 'ಟೊರೆಂಟ್ ಸಿದ್ಧವಾಗುತ್ತಿದೆ…';
+
+  @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total ಪೀರ್‌ಗಳು · $speed · $loaded ಲೋಡ್ ಆಗಿದೆ';
+  }
 
   @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
@@ -1564,7 +1574,10 @@ class AppLocalizationsKn extends AppLocalizations {
   }
 
   @override
-  String get playerReconnecting => 'Reconnecting…';
+  String get playerReconnecting => 'ಮರುಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿದೆ…';
+
+  @override
+  String get playerWaitingForNetwork => 'ನೆಟ್‌ವರ್ಕ್‌ಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2395,4 +2408,37 @@ class AppLocalizationsKn extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'ಗೌಣ';
+
+  @override
+  String get playerQuality => 'ಗುಣಮಟ್ಟ';
+
+  @override
+  String get playerQualityAuto => 'ಸ್ವಯಂ';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'ಸ್ವಯಂ · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'ಸ್ವಯಂ (ಶಿಫಾರಸು ಮಾಡಲಾಗಿದೆ)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'ಪ್ರತಿ ವೀಡಿಯೊಗೆ ಅದರ ಬಿಟ್‌ರೇಟ್ ಮತ್ತು ಈ ಸಾಧನದ ಮೆಮೊರಿಗೆ ತಕ್ಕಂತೆ ಗಾತ್ರ ನಿರ್ಧರಿಸಲಾಗುತ್ತದೆ.';
+
+  @override
+  String get devQoeLog => 'QoE ಲಾಗ್';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'ಪ್ಲೇಬ್ಯಾಕ್ ಸಮಯಗಳನ್ನು ಆ್ಯಪ್ ಲಾಗ್‌ಗೆ ಬರೆಯುತ್ತದೆ';
+
+  @override
+  String get playerGoLive => 'ಲೈವ್‌ಗೆ ಹೋಗಿ';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'ಲೈವ್‌ಗಿಂತ $time ಹಿಂದೆ';
+  }
 }

@@ -4,6 +4,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
+import 'device_memory.dart';
+
 part 'device_info_provider.g.dart';
 
 /// How much work this device can reasonably be asked to do.
@@ -101,11 +103,13 @@ Future<DeviceProfile> deviceProfile(Ref ref) async {
         isTv = androidInfo.systemFeatures.contains('android.software.leanback') ||
             androidInfo.systemFeatures.contains('android.hardware.type.television');
         physicalRamMb = androidInfo.physicalRamSize;
-        // Trust Android's own verdict first — ActivityManager.isLowRamDevice()
-        // is set by the OEM and accounts for more than raw megabytes.
-        tier = androidInfo.isLowRamDevice
-            ? DeviceTier.low
-            : _tierFromRam(androidInfo.physicalRamSize);
+        // The OEM's low-RAM verdict, through the app's memory channel: see
+        // [androidTier].
+        final memory = await readDeviceMemory();
+        tier = androidTier(
+          lowRam: memory.lowRam,
+          physicalRamMb: androidInfo.physicalRamSize,
+        );
         obeysOrientation = obeysOrientationRequests(
           isIOS: false,
           isTablet: isTablet,
@@ -139,6 +143,14 @@ Future<DeviceProfile> deviceProfile(Ref ref) async {
     obeysOrientationRequests: obeysOrientation,
   );
 }
+
+/// An Android device's tier: low when the OEM says it is a low-RAM device
+/// (`ActivityManager.isLowRamDevice()`, read through [readDeviceMemory]),
+/// otherwise by its RAM. device_info_plus's own `isLowRamDevice` is
+/// `MemoryInfo.lowMemory`, which says only that memory is short right now.
+@visibleForTesting
+DeviceTier androidTier({required bool lowRam, required int physicalRamMb}) =>
+    lowRam ? DeviceTier.low : _tierFromRam(physicalRamMb);
 
 /// Buckets raw megabytes. Thresholds are deliberately generous: the cost of
 /// treating a capable device as low-end is a slightly smaller buffer, while the

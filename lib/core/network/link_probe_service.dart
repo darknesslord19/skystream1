@@ -21,6 +21,37 @@ class HlsVariant {
   const HlsVariant({this.height, this.bandwidth});
 }
 
+final RegExp _resolutionRe = RegExp(r'RESOLUTION=(\d+)x(\d+)');
+final RegExp _bandwidthRe = RegExp(r'(?<![-A-Z])BANDWIDTH=(\d+)');
+
+/// The variants an HLS master playlist lists, in its order: one per
+/// `#EXT-X-STREAM-INF` line. An I-frame playlist
+/// (`#EXT-X-I-FRAME-STREAM-INF`) is trick play, not something to watch, and
+/// a media playlist lists none.
+List<HlsVariant> hlsVariantsOf(String playlist) {
+  final variants = <HlsVariant>[];
+  for (final line in playlist.split('\n')) {
+    if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
+    final res = _resolutionRe.firstMatch(line);
+    final bandwidth = _bandwidthRe.firstMatch(line);
+    variants.add(
+      HlsVariant(
+        height: res == null ? null : int.tryParse(res.group(2)!),
+        bandwidth: bandwidth == null ? null : int.tryParse(bandwidth.group(1)!),
+      ),
+    );
+  }
+  return variants;
+}
+
+/// How a height reads in the source lists and the player's Quality tab:
+/// `4K`, `2K`, else `1080p`.
+String resolutionLabelFor(int height) {
+  if (height >= 2160) return '4K';
+  if (height >= 1440) return '2K';
+  return '${height}p';
+}
+
 /// Outcome of testing whether a link is actually usable.
 class LinkProbeResult {
   final bool reachable;
@@ -55,10 +86,7 @@ class LinkProbeResult {
         .toList();
     if (heights.isEmpty) return null;
     heights.sort();
-    final best = heights.last;
-    if (best >= 2160) return '4K';
-    if (best >= 1440) return '2K';
-    return '${best}p';
+    return resolutionLabelFor(heights.last);
   }
 }
 
@@ -72,8 +100,6 @@ class LinkProbeService {
   final Map<String, Future<LinkProbeResult>> _inFlight = {};
 
   static const Duration _timeout = Duration(seconds: 8);
-  static final RegExp _resolutionRe = RegExp(r'RESOLUTION=(\d+)x(\d+)');
-  static final RegExp _bandwidthRe = RegExp(r'BANDWIDTH=(\d+)');
 
   Future<LinkProbeResult> probe(
     String url, {
@@ -254,20 +280,7 @@ class LinkProbeService {
           validateStatus: (status) => status != null && status < 500,
         ),
       );
-      final variants = <HlsVariant>[];
-      for (final line in (response.data ?? '').split('\n')) {
-        if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
-        final res = _resolutionRe.firstMatch(line);
-        final bandwidth = _bandwidthRe.firstMatch(line);
-        variants.add(
-          HlsVariant(
-            height: res == null ? null : int.tryParse(res.group(2)!),
-            bandwidth: bandwidth == null
-                ? null
-                : int.tryParse(bandwidth.group(1)!),
-          ),
-        );
-      }
+      final variants = hlsVariantsOf(response.data ?? '');
       if (variants.isEmpty) return base;
       return LinkProbeResult(
         reachable: base.reachable,

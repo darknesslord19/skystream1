@@ -80,6 +80,24 @@ void main() {
       // stall the raster thread for the whole shutdown.
       expect(copyPixelBuffer, isNot(contains('lifecycle_mutex_')));
     });
+
+    test('updates come from the pump, not a 500 ms poll', () {
+      final source = _fileText('windows/vlc_player_plugin.cpp');
+      expect(source, isNot(contains('sleep_for(std::chrono::milliseconds(500))')));
+      expect(source, contains('VlcUpdatePump'));
+      expect(disposeCore.indexOf('updates_->Stop()'), isNonNegative);
+      expect(
+        disposeCore.indexOf('updates_->Stop()'),
+        lessThan(disposeCore.indexOf('core_->Dispose()')),
+      );
+    });
+
+    test('setSource hands the core keepPicture, and the first player keeps '
+        'the plugin bank', () {
+      final source = _fileText('windows/vlc_player_plugin.cpp');
+      expect(source, contains('ReadBool(*arguments, "keepPicture")'));
+      expect(source, contains('KeepPluginBankLoaded('));
+    });
   });
 
   group('Linux plugin teardown', () {
@@ -134,6 +152,157 @@ void main() {
       expect(read, greaterThan(lock));
       expect(unlock, greaterThan(read));
     });
+
+    test('updates come from the pump, not a 500 ms poll', () {
+      final source = _fileText('linux/vlc_player_plugin.cc');
+      expect(source, isNot(contains('sleep_for(std::chrono::milliseconds(500))')));
+      expect(source, contains('VlcUpdatePump'));
+      expect(dispose.indexOf('updates_->Stop()'), isNonNegative);
+      expect(
+        dispose.indexOf('updates_->Stop()'),
+        lessThan(dispose.indexOf('core_->Dispose()')),
+        reason: 'no update may read the core while it goes',
+      );
+    });
+
+    test('setSource hands the core keepPicture', () {
+      final source = _fileText('linux/vlc_player_plugin.cc');
+      expect(source, contains('ReadBool(arguments, "keepPicture")'));
+    });
+  });
+
+  for (final platform in <String>['ios', 'macos']) {
+    group('$platform plugin teardown', () {
+      late String source;
+      late String dispose;
+
+      setUpAll(() {
+        source = _fileText(
+          '$platform/vlc_player/Sources/vlc_player/VlcPlayerPlugin.swift',
+        );
+        dispose = _functionBody(source, 'func dispose()');
+      });
+
+      test('lets the last reference to the player go off the main thread',
+          () {
+        // VLCKit's dealloc waits for the stream an asynchronous stop began
+        // stopping: 130 s on a stalled HLS download, on whichever thread
+        // drops the last reference. macOS retires its players one at a time:
+        // retire stops each and hands it to releaseLater (FORK.md 32).
+        final release = platform == 'macos' ? 'retire(' : 'releaseLater(';
+        expect(dispose, contains('mediaPlayer = nil'));
+        expect(dispose, contains(release));
+        if (platform == 'ios') {
+          expect(dispose.indexOf('stop()'), lessThan(dispose.indexOf(release)));
+        }
+        expect(
+          dispose.indexOf('textureRenderer?.detach()'),
+          lessThan(dispose.indexOf('mediaPlayer = nil')),
+        );
+      });
+
+      test('gives a source after the first a fresh player', () {
+        // VLCKit 3.7.4 starts a media set with set_media_async only once the
+        // old input has closed (patch 0023), and a stalled HLS segment kept
+        // that close waiting for as long as the stall: a reconnect from a
+        // stalled stream could not start.
+        final setSource = _functionBody(source, 'func setSource(');
+        expect(setSource, contains('replacePlayer()'));
+        expect(
+          setSource.indexOf('replacePlayer()'),
+          lessThan(setSource.indexOf('mediaPlayer.media = media')),
+        );
+        final replace = _functionBody(source, 'private func replacePlayer()');
+        expect(replace, contains('VLCMediaPlayer(library:'));
+        expect(replace, contains('textureRenderer?.attach(to: next)'));
+        // macOS stops the old player in retire, after the ones before it.
+        final stop = platform == 'macos' ? 'Self.retire(old)' : 'old.stop()';
+        expect(
+          replace.indexOf('old.delegate = nil'),
+          lessThan(replace.indexOf(stop)),
+        );
+        expect(
+          replace.indexOf('mediaPlayer = next'),
+          lessThan(
+            replace.indexOf(platform == 'macos' ? 'retire(' : 'releaseLater('),
+          ),
+        );
+      });
+
+      test('makes players on libVLC instances kept for the process', () {
+        // A released player must never end its libVLC instance: the end
+        // saves libVLC's configuration under a read lock it takes twice, and
+        // macOS's lock queues readers behind a writer (the audio output
+        // writes the configuration at every start and close), so a release
+        // off the main thread could deadlock with any of them.
+        expect(source, contains('VLCMediaPlayer(library:'));
+        expect(source, isNot(contains('VLCMediaPlayer(options:')));
+      });
+    });
+  }
+
+  test('iOS gives the audio session up only once the player is gone', () {
+    final source = _fileText(
+      'ios/vlc_player/Sources/vlc_player/VlcPlayerPlugin.swift',
+    );
+    final dispose = _functionBody(source, 'func dispose()');
+    expect(dispose, isNot(contains('relinquishAudioSession()')));
+    expect(dispose, contains('VlcAudioSession.shared.relinquish()'));
+  });
+
+  test("Android holds a replaced player's layout at its size before it "
+      'stops', () {
+    // libvlc-android's layout listener answers a resize - a rotation,
+    // picture-in-picture - by calling into libVLC on the main thread when the
+    // player has no picture size yet, behind the input lock its stop holds
+    // (FORK.md 29).
+    final source = _fileText(
+      'android/src/main/kotlin/com/lingjhf/vlc_player/'
+      'VlcPlayerPlatformView.kt',
+    );
+    final replace = _functionBody(source, 'private fun replacePlayer()');
+    final pin = replace.indexOf('videoLayout?.let(::pinSize)');
+    expect(pin, isNonNegative);
+    expect(pin, lessThan(replace.indexOf('retired.stop()')));
+    expect(
+      _functionBody(source, 'private fun pinSize('),
+      contains('FrameLayout.LayoutParams(width, height)'),
+    );
+  });
+
+  test('Android tells libVLC of a lost view only while no stop holds its '
+      'player', () {
+    // libvlc-android's listener turns the video off at once, on the main
+    // thread, and that waits for the input lock a stopping player's stop
+    // holds while it joins a read that hangs: the app stopped responding as
+    // it left a stream it had switched away from (FORK.md 29).
+    final source = _fileText(
+      'android/src/main/kotlin/com/lingjhf/vlc_player/'
+      'VlcPlayerPlatformView.kt',
+    );
+    final destroyed = _functionBody(
+      source,
+      'override fun onSurfaceTextureDestroyed(',
+    );
+    expect(
+      destroyed,
+      contains('if (keeper.tellsLibVlc) libVlc.onSurfaceTextureDestroyed('),
+    );
+    for (final (signature, player) in const [
+      ('private fun replacePlayer()', 'retired'),
+      ('override fun dispose()', 'player'),
+    ]) {
+      final body = _functionBody(source, signature);
+      final stopping = body.indexOf(
+        'surfaceKeepers[$player]?.playerStopping()',
+      );
+      expect(stopping, isNonNegative, reason: signature);
+      expect(
+        stopping,
+        lessThan(body.indexOf('$player.stop()')),
+        reason: signature,
+      );
+    }
   });
 }
 

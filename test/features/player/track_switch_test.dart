@@ -6,14 +6,13 @@ import 'package:vlc_player/vlc_player.dart';
 
 import 'fake_vlc_engine.dart';
 
-/// Switching a track lands now, not one caching interval from now.
+/// A track switch only selects (spec 1.4).
 ///
-/// A stream selected mid-playback begins at the demuxer's read point, which
-/// sits a whole caching interval ahead of the picture, so the newly chosen
-/// audio stays silent while the clock catches up. Re-issuing the current
-/// position flushes every stream and refills them together, which is the same
-/// thing a viewer discovers by scrubbing a little after switching - and it is
-/// what mpv did for free.
+/// It used to seek back to where playback was, so the new track would start
+/// at once rather than one caching interval later. With the interval at a
+/// second that bought little, and it cost a rebuffer, about 70 MB of
+/// re-download per MKV session, and a seek that could land on top of one of
+/// the viewer's.
 void main() {
   Future<VlcPlayerController> attach(FakeVlcEngine engine) async {
     engine.install();
@@ -46,66 +45,55 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// A player a minute into a seekable film.
+  /// A player a minute into a seekable film, with two audio languages and
+  /// two subtitles, none of them on.
   FakeVlcEngine playingEngine() => FakeVlcEngine()
     ..audio = <Map<String, Object?>>[
       <String, Object?>{'id': 1, 'name': 'English', 'language': 'eng'},
       <String, Object?>{'id': 3, 'name': 'French', 'language': 'fra'},
     ]
-    ..activeAudioId = 1;
+    ..activeAudioId = 1
+    ..subtitle = <Map<String, Object?>>[
+      <String, Object?>{'id': 5, 'name': 'English', 'language': 'eng'},
+      <String, Object?>{'id': 6, 'name': 'Spanish', 'language': 'spa'},
+    ];
 
-  const tracks = <VlcTrackDescription>[
+  const audio = <VlcTrackDescription>[
     VlcTrackDescription(id: 1, name: 'English', language: 'eng'),
     VlcTrackDescription(id: 3, name: 'French', language: 'fra'),
   ];
 
-  testWidgets('choosing an audio track re-seats playback where it is', (
+  const subtitles = <VlcTrackDescription>[
+    VlcTrackDescription(id: 5, name: 'English', language: 'eng'),
+    VlcTrackDescription(id: 6, name: 'Spanish', language: 'spa'),
+  ];
+
+  testWidgets('choosing an audio track selects it, and nothing seeks', (
     tester,
   ) async {
     final engine = playingEngine();
     final controller = await attach(engine);
-    await engine.emit(<String, Object?>{
-      'position': 60000,
-      'duration': 600000,
-    });
+    await engine.emit(<String, Object?>{'position': 60000, 'duration': 600000});
     await tester.pump(const Duration(milliseconds: 400));
 
     await pumpTracksTab(
       tester,
       controller: controller,
       kind: PlayerTrackKind.audio,
-      tracks: tracks,
+      tracks: audio,
     );
-
-    // Where the viewer is: the playback clock has run on from the engine's
-    // last report while the panel opened.
-    final here = controller.playbackClock.position.inMilliseconds;
-    expect(here, greaterThan(60000));
     await tester.tap(find.text('French'));
     await tester.pumpAndSettle();
 
     expect(engine.methods, contains('setAudioTrack'));
-    expect(
-      engine.methods.indexOf('seekTo'),
-      greaterThan(engine.methods.indexOf('setAudioTrack')),
-      reason: 'the flush has to come after the switch, or it flushes the old '
-          'selection and changes nothing',
-    );
-    expect(
-      (engine.callsTo('seekTo').last.arguments
-          as Map<Object?, Object?>)['position'],
-      here,
-      reason: 're-issued where the viewer already is, not somewhere else',
-    );
+    expect(engine.methods, isNot(contains('seekTo')));
 
     controller.dispose();
   });
 
-  testWidgets('after a seek made while paused, re-seats at the seek\'s '
-      'target', (tester) async {
-    // VLCKit's time does not move on a seek made while paused, so the
-    // engine's last word is still where the seek left from: re-seating there
-    // would undo the seek.
+  testWidgets("a switch leaves the viewer's own seek alone", (tester) async {
+    // The re-seat seeked again after every switch; one made right after the
+    // viewer's seek could overwrite it.
     final engine = playingEngine();
     final controller = await attach(engine);
     await engine.emit(<String, Object?>{
@@ -120,81 +108,63 @@ void main() {
       tester,
       controller: controller,
       kind: PlayerTrackKind.audio,
-      tracks: tracks,
+      tracks: audio,
     );
-
     await tester.tap(find.text('French'));
     await tester.pumpAndSettle();
 
     expect(engine.methods, contains('setAudioTrack'));
     expect(
-      (engine.callsTo('seekTo').last.arguments
-          as Map<Object?, Object?>)['position'],
-      90000,
+      engine
+          .callsTo('seekTo')
+          .map((call) => (call.arguments as Map<Object?, Object?>)['position']),
+      <Object?>[90000],
+      reason: "the viewer's seek, and nothing after it",
     );
 
     controller.dispose();
   });
 
-  testWidgets('turning subtitles off does not pay for a rebuffer', (
+  testWidgets('choosing a subtitle track selects it, and nothing seeks', (
     tester,
   ) async {
-    // Nothing has to be fetched to show nothing, so the flush would be a
-    // spinner in exchange for no benefit at all.
-    final engine = playingEngine()
-      ..subtitle = <Map<String, Object?>>[
-        <String, Object?>{'id': 5, 'name': 'English', 'language': 'eng'},
-      ]
-      ..activeSubtitleId = 5;
+    final engine = playingEngine();
     final controller = await attach(engine);
-    await engine.emit(<String, Object?>{
-      'position': 60000,
-      'duration': 600000,
-    });
+    await engine.emit(<String, Object?>{'position': 60000, 'duration': 600000});
     await tester.pump(const Duration(milliseconds: 400));
 
     await pumpTracksTab(
       tester,
       controller: controller,
       kind: PlayerTrackKind.subtitle,
-      tracks: const <VlcTrackDescription>[
-        VlcTrackDescription(id: 5, name: 'English', language: 'eng'),
-      ],
+      tracks: subtitles,
     );
-
-    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-    await tester.tap(find.text(l10n.off));
+    await tester.tap(find.text('Spanish'));
     await tester.pumpAndSettle();
 
-    expect(engine.methods, contains('disableSubtitle'));
+    expect(engine.methods, contains('setSubtitleTrack'));
     expect(engine.methods, isNot(contains('seekTo')));
 
     controller.dispose();
   });
 
-  testWidgets('a live feed is never re-seated', (tester) async {
-    // There is nowhere to seek to, and asking would fail the call.
-    final engine = playingEngine();
+  testWidgets('turning subtitles off is a selection too', (tester) async {
+    final engine = playingEngine()..activeSubtitleId = 5;
     final controller = await attach(engine);
-    await engine.emit(<String, Object?>{
-      'position': 60000,
-      'duration': 0,
-      'isLive': true,
-      'isSeekable': false,
-    });
+    await engine.emit(<String, Object?>{'position': 60000, 'duration': 600000});
     await tester.pump(const Duration(milliseconds: 400));
 
     await pumpTracksTab(
       tester,
       controller: controller,
-      kind: PlayerTrackKind.audio,
-      tracks: tracks,
+      kind: PlayerTrackKind.subtitle,
+      tracks: subtitles,
     );
-
-    await tester.tap(find.text('French'));
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    await tester.tap(find.text(l10n.off));
     await tester.pumpAndSettle();
 
-    expect(engine.methods, contains('setAudioTrack'));
+    expect(engine.methods, contains('disableSubtitle'));
     expect(engine.methods, isNot(contains('seekTo')));
 
     controller.dispose();

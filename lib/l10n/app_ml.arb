@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "ഗുണനിലവാരം ഉറപ്പില്ല. ഉറവിടങ്ങൾ ഈ മുൻഗണന അനുസരിച്ച് ക്രമീകരിക്കുന്നു, ഒന്നിലധികം ഗുണനിലവാരങ്ങളുള്ള സ്ട്രീം ഈ ഗുണനിലവാരത്തിലോ അതിനു താഴെയുള്ള ഏറ്റവും അടുത്തതിലോ പ്ലേ ചെയ്യും. പ്ലേബാക്ക് ദാതാവ് യഥാർത്ഥത്തിൽ എന്ത് നൽകുന്നു എന്നതിനെ ആശ്രയിച്ചിരിക്കുന്നു.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "അഭിനേതാക്കൾ: {names}",
   "actorRoleMain": "പ്രധാന",
   "actorRoleSupporting": "സഹ",
-  "actorRoleBackground": "പശ്ചാത്തല"
+  "actorRoleBackground": "പശ്ചാത്തല",
+  "playerQuality": "ഗുണനിലവാരം",
+  "playerQualityAuto": "ഓട്ടോ",
+  "playerQualityAutoPlaying": "ഓട്ടോ · {height}",
+  "networkBufferAuto": "ഓട്ടോ (ശുപാർശ ചെയ്യുന്നത്)",
+  "networkBufferAutoHint": "ഓരോ വീഡിയോയ്ക്കും അതിന്റെ ബിറ്റ്റേറ്റും ഈ ഉപകരണത്തിന്റെ മെമ്മറിയും അനുസരിച്ച് വലുപ്പം നിശ്ചയിക്കുന്നു.",
+  "devQoeLog": "QoE ലോഗ്",
+  "devQoeLogSubtitle": "പ്ലേബാക്ക് സമയങ്ങൾ ആപ്പ് ലോഗിൽ എഴുതുന്നു",
+  "playerGoLive": "തത്സമയത്തിലേക്ക് പോകുക",
+  "playerBehindLive": "തത്സമയത്തേക്കാൾ {time} പിന്നിൽ"
 }

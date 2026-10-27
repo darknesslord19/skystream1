@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import 'hotstar_player_style.dart';
+import '../../domain/live_window.dart' show behindLiveClock;
 import '../../../skip/data/skip_service.dart';
 import '../../../../shared/focus/app_focus.dart';
 
@@ -165,6 +166,8 @@ class PlayerTimeLabel extends ConsumerWidget {
     required this.duration,
     this.hasDuration = true,
     this.isLive = false,
+    this.behindLive,
+    this.onGoLive,
     super.key,
   });
 
@@ -177,9 +180,48 @@ class PlayerTimeLabel extends ConsumerWidget {
 
   final bool isLive;
 
+  /// How far behind the live edge playback is, on a live stream with a
+  /// window to move in: shown as "−0:42" beside a LIVE badge that goes back
+  /// to the edge. Null at the edge, or with no window, where the red badge
+  /// stands alone.
+  final Duration? behindLive;
+
+  /// Goes back to the live edge, from the LIVE badge: null for a stream with
+  /// no window to move in, whose badge is only a badge.
+  final VoidCallback? onGoLive;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (isLive) return const _LivePill();
+    if (isLive) {
+      final behind = behindLive;
+      // Counted as live, and still a way back to the edge: how far counts as
+      // live is a guess where the segments are, and the viewer's tap is not.
+      if (behind == null) return _LivePill(onGoLive: onGoLive, atLive: true);
+      final clock = behindLiveClock(behind);
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Semantics(
+            label: AppLocalizations.of(context)!
+                .playerBehindLive(clock.substring(1)),
+            excludeSemantics: true,
+            child: Text(
+              clock,
+              maxLines: 1,
+              softWrap: false,
+              style: const TextStyle(
+                color: HotstarPlayerStyle.primaryText,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          _LivePill(onGoLive: onGoLive),
+        ],
+      );
+    }
 
     final showRemaining =
         ref.watch(
@@ -222,11 +264,58 @@ class PlayerTimeLabel extends ConsumerWidget {
 ///
 /// No padding and no [Align] of its own: it stands exactly where the clock it
 /// replaces stands, and the transport row places both.
-class _LivePill extends StatelessWidget {
-  const _LivePill();
+///
+/// Red at the live edge, grey behind it; with [onGoLive], a button that goes
+/// back to the edge either way. As a button it draws the player's white focus
+/// ring when a remote or a keyboard moves onto it, as the other player
+/// buttons do.
+class _LivePill extends StatefulWidget {
+  const _LivePill({this.onGoLive, this.atLive = false});
+
+  final VoidCallback? onGoLive;
+
+  /// Whether playback counts as live, which makes the badge red.
+  final bool atLive;
+
+  @override
+  State<_LivePill> createState() => _LivePillState();
+}
+
+class _LivePillState extends State<_LivePill> {
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
+    final goLive = widget.onGoLive;
+    final color = goLive == null || widget.atLive
+        ? HotstarPlayerStyle.liveRed
+        : HotstarPlayerStyle.secondaryText;
+    if (goLive == null) return _badge(context, color);
+    final label = AppLocalizations.of(context)!.playerGoLive;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        child: InkWell(
+          onTap: goLive,
+          onFocusChange: (value) => setState(() => _focused = value),
+          // The ring is the focus cue, not the overlay: drawn only for a
+          // remote or a keyboard, not left behind by a tap.
+          focusColor: Colors.transparent,
+          borderRadius: BorderRadius.circular(4),
+          child: _badge(
+            context,
+            color,
+            focused: showFocusIndicator(context, _focused),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _badge(BuildContext context, Color color, {bool focused = false}) {
     return Container(
       height: 22,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -234,22 +323,24 @@ class _LivePill extends StatelessWidget {
         // The token, not `Colors.red`. They are three points apart and the
         // token is the one with the contrast behind it; this pill was the only
         // thing in the player still reaching past it for the Material swatch.
-        color: HotstarPlayerStyle.liveRed.withValues(alpha: 0.16),
+        color: color.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(
-          color: HotstarPlayerStyle.liveRed.withValues(alpha: 0.45),
-          width: 1,
-        ),
+        border: focused
+            ? Border.all(
+                color: HotstarPlayerStyle.focusRing,
+                width: HotstarPlayerStyle.focusRingWidth,
+              )
+            : Border.all(color: color.withValues(alpha: 0.45), width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.circle, color: HotstarPlayerStyle.liveRed, size: 7),
+          Icon(Icons.circle, color: color, size: 7),
           const SizedBox(width: 5),
           Text(
             AppLocalizations.of(context)!.live,
-            style: const TextStyle(
-              color: HotstarPlayerStyle.liveRed,
+            style: TextStyle(
+              color: color,
               fontWeight: FontWeight.w800,
               fontSize: 11,
               letterSpacing: 0.5,

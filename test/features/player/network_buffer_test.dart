@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vlc_player/vlc_player.dart';
 
-import 'package:skystream/core/providers/device_info_provider.dart';
 import 'package:skystream/features/player/domain/network_buffer.dart';
 
 import 'fake_vlc_engine.dart';
@@ -35,6 +34,12 @@ void main() {
     return (arguments['options'] as List<Object?>).cast<String>();
   }
 
+  List<String> lastMediaOptions() {
+    final open = engine.callsTo('setSource').last;
+    final arguments = open.arguments as Map<Object?, Object?>;
+    return (arguments['mediaOptions'] as List<Object?>).cast<String>();
+  }
+
   group('the buffer option', () {
     test('a buffer size is the size alone, with no second filter', () {
       const config = VlcNetworkConfig(prefetchBufferKiB: 16384);
@@ -52,31 +57,28 @@ void main() {
     });
   });
 
-  testWidgets('the player asks for the buffer in KiB', variant: texturePlatform, (
+  testWidgets('each media asks for its own read-ahead, in KiB', variant: texturePlatform, (
     tester,
   ) async {
     await pumpPlayer(tester);
     await settle(tester);
 
-    final options = createdOptions();
     expect(
-      options,
-      isNot(contains('--stream-filter=prefetch')),
-      reason: 'libVLC inserts the filter itself; naming it stacks a second',
+      createdOptions().where((o) => o.contains('prefetch')),
+      isEmpty,
+      reason: 'the player keeps libVLC\'s own; each media brings its size',
     );
-
-    // Nothing chosen, so this device's default applies. The harness reports
-    // no device profile, which resolves to the standard tier.
+    // The harness's 4 GB device with half of it free (a 256 MB cap), a film
+    // with no size and no label (8 Mbit/s assumed), on Wi-Fi: 180 s, 172 MB.
+    expect(lastMediaOptions(), contains(':prefetch-buffer-size=${172 * 1024}'));
     expect(
-      options,
-      contains(
-        '--prefetch-buffer-size=${defaultNetworkBufferMb(DeviceTier.standard) * 1024}',
-      ),
+      lastMediaOptions().where((o) => o.contains('stream-filter')),
+      isEmpty,
+      reason: 'libVLC inserts the filter itself; naming it stacks a second',
     );
 
     await tester.pumpWidget(const SizedBox());
   });
-
   testWidgets('read-ahead is not latency', variant: texturePlatform, (
     tester,
   ) async {
@@ -86,74 +88,17 @@ void main() {
     await pumpPlayer(tester);
     await settle(tester);
 
-    final options = createdOptions();
-    final caching = options.firstWhere(
-      (o) => o.startsWith('--network-caching='),
-    );
-
-    expect(caching, '--network-caching=3000');
     expect(
-      options.where((o) => o.startsWith('--network-caching=')),
-      hasLength(1),
-      reason: 'the buffer setting must not add a second caching option',
+      createdOptions().where((o) => o.startsWith('--network-caching=')),
+      ['--network-caching=1000'],
+    );
+    expect(
+      lastMediaOptions().where((o) => o.startsWith(':network-caching=')),
+      [':network-caching=1000'],
+      reason: 'the buffer must not add a second caching option',
     );
 
     await tester.pumpWidget(const SizedBox());
-  });
-
-  group('what a device starts with', () {
-    test('more memory means a larger buffer, and never the reverse', () {
-      final low = defaultNetworkBufferMb(DeviceTier.low);
-      final standard = defaultNetworkBufferMb(DeviceTier.standard);
-      final high = defaultNetworkBufferMb(DeviceTier.high);
-
-      expect(low, lessThan(standard));
-      expect(standard, lessThan(high));
-      expect(
-        high,
-        512,
-        reason:
-            'anything with memory to spare, which is every desktop and any '
-            'handset reporting 6 GB or more - the tier is a RAM verdict, not '
-            'a platform one',
-      );
-    });
-
-    test('every default is one of the sizes actually on offer', () {
-      // Otherwise the dialog opens with nothing selected.
-      for (final tier in DeviceTier.values) {
-        expect(
-          kNetworkBufferChoicesMb,
-          contains(defaultNetworkBufferMb(tier)),
-          reason: 'no row would be ticked on $tier',
-        );
-      }
-    });
-
-    test('the largest size is offered but is nobody default', () {
-      // Offered because someone with the memory may want it; never a default,
-      // because the buffer is resident and competes with the decoder's own
-      // picture pool - and the top of this range is not sized for the bottom
-      // of the device range.
-      final largest = kNetworkBufferChoicesMb.last;
-      expect(largest, 1024);
-      expect(
-        DeviceTier.values.map(defaultNetworkBufferMb),
-        isNot(contains(largest)),
-      );
-    });
-
-    test('a choice beats the device, whichever way it goes', () {
-      expect(resolveNetworkBufferMb(64, DeviceTier.high), 64);
-      expect(resolveNetworkBufferMb(1024, DeviceTier.low), 1024);
-    });
-
-    test('no choice falls to the device', () {
-      expect(
-        resolveNetworkBufferMb(null, DeviceTier.high),
-        defaultNetworkBufferMb(DeviceTier.high),
-      );
-    });
   });
 }
 

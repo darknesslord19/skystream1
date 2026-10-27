@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vlc_player/vlc_player.dart';
-import 'package:skystream/core/providers/device_info_provider.dart';
-import 'package:skystream/features/player/domain/network_buffer.dart';
 import 'package:skystream/features/player/presentation/widgets/player_stream_widgets.dart';
 
 import 'fake_vlc_engine.dart';
@@ -193,9 +191,10 @@ void main() {
         await settle(tester);
       }
 
-      // The standard tier's 256 MB, at the rate the sampler measured - 1 MB/s,
-      // or half that where a reading lands a tick late.
-      final capacity = defaultNetworkBufferMb(DeviceTier.standard) * 1048576;
+      // The read-ahead the buffer rule gives the harness's film, 172 MB, at
+      // the rate the sampler measured - 1 MB/s, or half that where a reading
+      // lands a tick late.
+      const capacity = 172 * 1048576;
       expect(bandRatio(tester), greaterThan(0), reason: 'not blank');
       expect(
         bandRatio(tester),

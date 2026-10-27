@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "মানের নিশ্চয়তা নেই। উৎসগুলো এই পছন্দ অনুযায়ী সাজানো হয়, আর যে স্ট্রিমে একাধিক মান থাকে তা এই মানে বা এর নিচের সবচেয়ে কাছের মানে চলে। প্লেব্যাক নির্ভর করে প্রদানকারী আসলে কী দেয় তার ওপর।",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "অভিনয়ে: {names}",
   "actorRoleMain": "প্রধান",
   "actorRoleSupporting": "পার্শ্ব",
-  "actorRoleBackground": "গৌণ"
+  "actorRoleBackground": "গৌণ",
+  "playerQuality": "মান",
+  "playerQualityAuto": "অটো",
+  "playerQualityAutoPlaying": "অটো · {height}",
+  "networkBufferAuto": "স্বয়ংক্রিয় (প্রস্তাবিত)",
+  "networkBufferAutoHint": "প্রতিটি ভিডিওর বিটরেট আর এই ডিভাইসের মেমরি অনুযায়ী আকার ঠিক হয়।",
+  "devQoeLog": "QoE লগ",
+  "devQoeLogSubtitle": "প্লেব্যাকের সময়গুলো অ্যাপের লগে লেখে",
+  "playerGoLive": "লাইভে যান",
+  "playerBehindLive": "লাইভ থেকে {time} পিছিয়ে"
 }

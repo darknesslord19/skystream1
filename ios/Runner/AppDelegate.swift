@@ -1,4 +1,5 @@
 import Flutter
+import os
 import UIKit
 import UserNotifications
 
@@ -174,6 +175,29 @@ import UserNotifications
         AppDelegate.followDeviceOrientation(fallback: fallback)
         result(nil)
       }
+    }
+
+    // What the player sizes its read-ahead from (lib/core/providers/device_memory.dart).
+    let memoryChannel = FlutterMethodChannel(
+      name: "dev.akash.skystream/device_memory",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    memoryChannel.setMethodCallHandler { call, result in
+      guard call.method == "read" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      var reading: [String: Any] = [
+        "totalMb": Int(ProcessInfo.processInfo.physicalMemory / 1_048_576),
+        "lowRam": false,
+      ]
+      // What this app may still allocate before iOS ends it: what a buffer
+      // competes for. The simulator has no such limit and reports 0.
+      let available = os_proc_available_memory()
+      if available > 0 {
+        reading["freeMb"] = Int(available / 1_048_576)
+      }
+      result(reading)
     }
   }
 

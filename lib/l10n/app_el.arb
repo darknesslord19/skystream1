@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Η ποιότητα δεν είναι εγγυημένη. Οι πηγές ταξινομούνται με βάση αυτή την προτίμηση, και μια ροή με πολλές ποιότητες παίζει σε αυτήν ή στην πλησιέστερη χαμηλότερη. Η αναπαραγωγή εξαρτάται από το τι προσφέρει πραγματικά ο πάροχος.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Ηθοποιοί: {names}",
   "actorRoleMain": "Πρωταγωνιστικός",
   "actorRoleSupporting": "Δευτερεύων",
-  "actorRoleBackground": "Κομπάρσος"
+  "actorRoleBackground": "Κομπάρσος",
+  "playerQuality": "Ποιότητα",
+  "playerQualityAuto": "Αυτόματο",
+  "playerQualityAutoPlaying": "Αυτόματο · {height}",
+  "networkBufferAuto": "Αυτόματο (προτείνεται)",
+  "networkBufferAutoHint": "Προσαρμόζεται σε κάθε βίντεο με βάση τον ρυθμό bit του και τη μνήμη αυτής της συσκευής.",
+  "devQoeLog": "Αρχείο καταγραφής QoE",
+  "devQoeLogSubtitle": "Γράφει τους χρόνους αναπαραγωγής στο αρχείο καταγραφής της εφαρμογής",
+  "playerGoLive": "Μετάβαση στο ζωντανό",
+  "playerBehindLive": "{time} πίσω από το ζωντανό"
 }

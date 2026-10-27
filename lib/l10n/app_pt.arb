@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "Chave API (Opcional)",
   "enterKeyToOverrideDefault": "Insira a chave para substituir o padrão",
   "getApiKeyFromProfile": "Obtenha sua chave API no perfil do SubSource",
-  "qualityNotGuaranteed": "A qualidade não é garantida. As fontes são ordenadas por preferência, mas dependem do que o provedor oferece.",
+  "qualityNotGuaranteed": "A qualidade não é garantida. As fontes são ordenadas por esta preferência, e uma transmissão com várias qualidades é reproduzida nela ou na mais próxima abaixo. A reprodução depende do que o fornecedor realmente oferece.",
   "keepSourcesOriginalOrder": "Manter ordem original das fontes",
   "openLink": "Abrir link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Elenco: {names}",
   "actorRoleMain": "Principal",
   "actorRoleSupporting": "Secundário",
-  "actorRoleBackground": "Figurante"
+  "actorRoleBackground": "Figurante",
+  "playerQuality": "Qualidade",
+  "playerQualityAuto": "Automática",
+  "playerQualityAutoPlaying": "Automática · {height}",
+  "networkBufferAuto": "Automático (recomendado)",
+  "networkBufferAutoHint": "Dimensionado para cada vídeo segundo a sua taxa de bits e a memória deste dispositivo.",
+  "devQoeLog": "Registo de QoE",
+  "devQoeLogSubtitle": "Escreve os tempos de reprodução no registo da aplicação",
+  "playerGoLive": "Ir para o direto",
+  "playerBehindLive": "{time} atrás do direto"
 }

@@ -36,10 +36,16 @@ env:
   # Pinned for the same reason as ci.yml: an unpinned `stable` means the
   # artifacts we ship are built by a newer SDK than the one CI gated on.
   FLUTTER_VERSION: 3.47.7
-  # Pinned for the same reason. The Windows runner image ships 6.7.1 today, and
-  # Inno Setup 7 installs to another folder and changes some defaults, so moving
-  # to it is a deliberate bump here.
-  INNO_SETUP_VERSION: 6.7.1
+  # Pinned for the same reason. Chocolatey's innosetup package stopped at 6.7.1
+  # when jrsoftware moved its downloads to GitHub releases (March 2026), so the
+  # Windows job downloads the installer below from its release and checks its
+  # SHA-256 (GitHub's digest for the asset, also in jrsoftware's .issig file).
+  # The x64 edition goes to C:\Program Files\Inno Setup 7, beside the image's
+  # 6.7.1, and the build step finds it by the version in its uninstall entry.
+  # (The x86 edition's entry says "7.1.0 (32-bit)", which would not match.)
+  INNO_SETUP_VERSION: 7.1.0
+  INNO_SETUP_INSTALLER: innosetup-7.1.0-x64.exe
+  INNO_SETUP_SHA256: 0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f
 
 jobs:
   version:
@@ -128,6 +134,7 @@ jobs:
             "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
             "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
             "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "SIMKL_V2_CLIENT_ID": "${{ secrets.SIMKL_V2_CLIENT_ID }}",
             "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
             "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
             "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
@@ -225,6 +232,7 @@ jobs:
             "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
             "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
             "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "SIMKL_V2_CLIENT_ID": "${{ secrets.SIMKL_V2_CLIENT_ID }}",
             "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
             "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
             "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
@@ -325,6 +333,7 @@ jobs:
             "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
             "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
             "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "SIMKL_V2_CLIENT_ID": "${{ secrets.SIMKL_V2_CLIENT_ID }}",
             "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
             "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
             "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
@@ -491,6 +500,7 @@ jobs:
             "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
             "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
             "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "SIMKL_V2_CLIENT_ID": "${{ secrets.SIMKL_V2_CLIENT_ID }}",
             "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
             "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
             "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",
@@ -504,9 +514,44 @@ jobs:
       - name: Build Windows
         run: flutter build windows --release --dart-define-from-file=dart-defines.json
 
+      - name: Check libVLC's plugin cache tool
+        shell: pwsh
+        run: |
+          $Release = "build\windows\${{ matrix.arch }}\runner\Release"
+          # The folder must be given as a full path. libVLC loads each plugin
+          # with LoadLibraryExW(LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR), which refuses
+          # a relative path, and saves the cache of the folder it was given
+          # last, over the full one it made of its own plugins folder: with a
+          # relative path every plugin fails to load and plugins.dat ends up
+          # 24 bytes (measured with VLC 3.0.24's vlc-cache-gen: 309,705 bytes
+          # with the full path). The installer already passes {app}\plugins.
+          $Plugins = (Resolve-Path "$Release\plugins").Path
+          & "$Release\vlc-cache-gen.exe" $Plugins
+          if ($LASTEXITCODE -ne 0) { throw "vlc-cache-gen.exe failed on the bundle" }
+          $Cache = Get-Item "$Release\plugins\plugins.dat" -ErrorAction Stop
+          if ($Cache.Length -lt 100000) { throw "plugins.dat is only $($Cache.Length) bytes" }
+          # Made for this check only. A cache made here would be stale on any
+          # user's machine (ZIP and installer timestamps are rounded to 2 s,
+          # and the ZIP's are local), so the installer makes one on install
+          # and the portable app on its first launch.
+          Get-ChildItem "$Release\plugins" -Filter "plugins.dat*" | Remove-Item
+
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --version=$env:INNO_SETUP_VERSION --allow-downgrade -y --no-progress
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $Tag = 'is-' + $env:INNO_SETUP_VERSION.Replace('.', '_')
+          $Installer = Join-Path $env:RUNNER_TEMP $env:INNO_SETUP_INSTALLER
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/$Tag/$env:INNO_SETUP_INSTALLER" -OutFile $Installer -MaximumRetryCount 3 -RetryIntervalSec 10
+          $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash
+          if ($Hash -ne $env:INNO_SETUP_SHA256) { throw "$env:INNO_SETUP_INSTALLER has SHA-256 $Hash, not the pinned $env:INNO_SETUP_SHA256" }
+          # For all users, so its uninstall entry is in HKLM, where the build step looks.
+          $Log = Join-Path $env:RUNNER_TEMP 'innosetup-install.log'
+          $Setup = Start-Process -FilePath $Installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/ALLUSERS', "/LOG=`"$Log`"" -Wait -PassThru
+          if ($Setup.ExitCode -ne 0) {
+            Get-Content -LiteralPath $Log -Tail 40 -ErrorAction SilentlyContinue
+            throw "Inno Setup $env:INNO_SETUP_VERSION's installer exited with $($Setup.ExitCode)"
+          }
 
       - name: Build Installer (EXE)
         shell: pwsh
@@ -647,6 +692,7 @@ jobs:
             "TMDB_API_KEY": "${{ secrets.TMDB_API_KEY }}",
             "SIMKL_CLIENT_ID": "${{ secrets.SIMKL_CLIENT_ID }}",
             "SIMKL_CLIENT_SECRET": "${{ secrets.SIMKL_CLIENT_SECRET }}",
+            "SIMKL_V2_CLIENT_ID": "${{ secrets.SIMKL_V2_CLIENT_ID }}",
             "TRAKT_CLIENT_ID": "${{ secrets.TRAKT_CLIENT_ID }}",
             "TRAKT_CLIENT_SECRET": "${{ secrets.TRAKT_CLIENT_SECRET }}",
             "MAL_CLIENT_ID": "${{ secrets.MAL_CLIENT_ID }}",

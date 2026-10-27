@@ -80,6 +80,21 @@ class _RecordingAudioLanguage extends PlayerSettingsNotifier {
   }
 }
 
+/// Records the buffer sizes a dialog picks without opening Hive.
+class _RecordingBuffer extends PlayerSettingsNotifier {
+  _RecordingBuffer(this.chosen);
+
+  final List<int?> chosen;
+
+  @override
+  Future<PlayerSettings> build() async => const PlayerSettings();
+
+  @override
+  Future<void> setBufferOverrideMb(int? megabytes) async {
+    chosen.add(megabytes);
+  }
+}
+
 /// Keeps the DoH picker off SharedPreferences.
 class _StubDoh extends DohSettingsNotifier {
   _StubDoh(this._value);
@@ -563,6 +578,75 @@ void main() {
   /// A list as long as the app's language picker, so on a television it has
   /// to open on the choice in force - focused and on screen - or a remote
   /// starts forty rows away from it.
+  group('showNetworkBufferDialog', () {
+    late AppLocalizations l10n;
+
+    setUpAll(() async {
+      l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    });
+
+    Future<List<int?>> open(WidgetTester tester, int? current) async {
+      final List<int?> chosen = <int?>[];
+      await _pumpOpener(
+        tester,
+        settings: () => _RecordingBuffer(chosen),
+        open: (context, ref) => showNetworkBufferDialog(context, ref, current),
+      );
+      return chosen;
+    }
+
+    List<String?> rowTitles(WidgetTester tester) => tester
+        .widgetList<ListTile>(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.byType(ListTile, skipOffstage: false),
+          ),
+        )
+        .map((ListTile tile) => (tile.title! as Text).data)
+        .toList();
+
+    testWidgets('offers Auto, saying what it does, then the sizes', (
+      tester,
+    ) async {
+      await open(tester, null);
+
+      expect(rowTitles(tester), <String?>[
+        l10n.networkBufferAuto,
+        '64 MB',
+        '128 MB',
+        '256 MB',
+        '512 MB',
+        '1024 MB',
+      ]);
+      expect(find.text(l10n.networkBufferAutoHint), findsOneWidget);
+    });
+
+    testWidgets('opens on Auto when no size is picked', (tester) async {
+      await open(tester, null);
+      expect(_focusedRowTitle(), l10n.networkBufferAuto);
+    });
+
+    testWidgets('opens on the size picked', (tester) async {
+      await open(tester, 512);
+      expect(_focusedRowTitle(), '512 MB');
+    });
+
+    testWidgets('Auto reaches the setter as no size', (tester) async {
+      final List<int?> chosen = await open(tester, 256);
+      await tester.tap(find.text(l10n.networkBufferAuto));
+      await tester.pumpAndSettle();
+      expect(chosen, <int?>[null]);
+      expect(find.byType(AlertDialog), findsNothing);
+    });
+
+    testWidgets('a size reaches the setter as itself', (tester) async {
+      final List<int?> chosen = await open(tester, null);
+      await tester.tap(find.text('128 MB'));
+      await tester.pumpAndSettle();
+      expect(chosen, <int?>[128]);
+    });
+  });
+
   group('showPreferredAudioLanguageDialog', () {
     late AppLocalizations l10n;
 

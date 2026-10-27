@@ -40,19 +40,30 @@ enum VlcDecodeThrift {
   aggressive,
 }
 
-/// Which rendition an adaptive (HLS/DASH) stream should start on.
+/// How an adaptive (HLS/DASH) stream picks its rendition
+/// (`--adaptive-logic`).
+///
+/// Unset, libVLC 3 uses `nearoptimal` (BOLA), which starts on the lowest
+/// rendition and climbs (3.0.24 `PlaylistManager.cpp`).
 enum VlcAdaptiveLogic {
-  /// Estimate available bandwidth and adapt (VLC default).
+  /// Follows the bandwidth measured over recent downloads.
   rate,
 
-  /// Always pick the lowest rendition. Fastest start, lowest quality.
+  /// Plays the highest rendition allowed for its first three segments, then
+  /// follows its buffer against libVLC's fixed 12 s stable target: up above
+  /// 80 %, held above 50 %, down below (3.0.24
+  /// `PredictiveAdaptationLogic.cpp`).
+  predictive,
+
+  /// Always picks the lowest rendition. Fastest start, lowest quality.
   lowest,
 
-  /// Always pick the highest rendition.
+  /// Always picks the highest rendition allowed.
   highest;
 
   String get _value => switch (this) {
     VlcAdaptiveLogic.rate => 'rate',
+    VlcAdaptiveLogic.predictive => 'predictive',
     VlcAdaptiveLogic.lowest => 'lowest',
     VlcAdaptiveLogic.highest => 'highest',
   };

@@ -17,6 +17,8 @@
 
 #include "vlc_player_plugin_private.h"
 #include "vlc_player_core.h"
+#include "vlc_snapshot_order.h"
+#include "vlc_update_pump.h"
 
 #define VLC_PLAYER_PLUGIN(obj) \
   (G_TYPE_CHECK_INSTANCE_CAST((obj), vlc_player_plugin_get_type(), \
@@ -235,12 +237,20 @@ class LinuxVlcPlayer {
     fl_event_channel_set_stream_handlers(event_channel_, Listen, Cancel, this,
                                          nullptr);
 
-    core_ = std::make_unique<vlc_player::VlcPlayerCore>(options, [this] {
-      if (!disposed_.load() && texture_ != nullptr) {
-        fl_texture_registrar_mark_texture_frame_available(
-            texture_registrar_, FL_TEXTURE(texture_));
-      }
-    });
+    // Made before the core, which wakes it from libVLC's threads as soon as
+    // it exists; started once the texture is in place.
+    updates_ = std::make_unique<vlc_player::VlcUpdatePump>(
+        [this] { SendSnapshot(); }, std::chrono::milliseconds(100),
+        std::chrono::milliseconds(1000));
+    core_ = std::make_unique<vlc_player::VlcPlayerCore>(
+        options,
+        [this] {
+          if (!disposed_.load() && texture_ != nullptr) {
+            fl_texture_registrar_mark_texture_frame_available(
+                texture_registrar_, FL_TEXTURE(texture_));
+          }
+        },
+        [this] { updates_->Wake(); });
     if (!core_->is_valid()) {
       init_error_ = core_->error();
       return;
@@ -256,13 +266,7 @@ class LinuxVlcPlayer {
     }
     texture_id_ = fl_texture_get_id(FL_TEXTURE(texture_));
 
-    polling_ = true;
-    polling_thread_ = std::thread([this] {
-      while (polling_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        SendSnapshot();
-      }
-    });
+    updates_->Start();
   }
 
   ~LinuxVlcPlayer() { Dispose(); }
@@ -275,9 +279,10 @@ class LinuxVlcPlayer {
                         const std::vector<std::string>& headers,
                         const std::vector<std::string>& media_options,
                         int64_t start_position,
-                        bool auto_play) {
-    const std::string error =
-        core_->SetSource(uri, headers, media_options, start_position, false);
+                        bool auto_play,
+                        bool keep_picture) {
+    const std::string error = core_->SetSource(
+        uri, headers, media_options, start_position, false, keep_picture);
     SendSnapshot();
     if (!error.empty() || !auto_play) {
       return error;
@@ -300,6 +305,12 @@ class LinuxVlcPlayer {
   std::string SeekTo(int64_t milliseconds) {
     return RunAndSendSnapshot([this, milliseconds] {
       return core_->SeekTo(milliseconds);
+    });
+  }
+
+  std::string SeekToFraction(double fraction) {
+    return RunAndSendSnapshot([this, fraction] {
+      return core_->SeekToFraction(fraction);
     });
   }
 
@@ -388,20 +399,21 @@ class LinuxVlcPlayer {
     if (disposed_.exchange(true)) {
       return;
     }
-    polling_ = false;
-    if (polling_thread_.joinable()) {
-      polling_thread_.join();
+    // No update reads the core while it goes. Returns at once: the pump
+    // waits on a condition, not a sleep.
+    if (updates_ != nullptr) {
+      updates_->Stop();
     }
     if (event_channel_ != nullptr) {
       fl_event_channel_set_stream_handlers(event_channel_, nullptr, nullptr,
                                            nullptr, nullptr);
       g_clear_object(&event_channel_);
     }
-    // Stop libVLC first. This blocks - the stop joins libVLC's own threads -
-    // but it frees nothing the compositor can be reading: VlcPlayerCore::
-    // Dispose() detaches the video output and drops the media player while
-    // deliberately leaving the pixel sink mapped, so a populate racing this
-    // still reads live memory. It is also what silences the frame callback,
+    // Stop libVLC first. This no longer blocks: VlcPlayerCore::Dispose()
+    // detaches the video output and the events and hands the media player to
+    // a thread of its own (FORK.md 21). It frees nothing the compositor can
+    // be reading - the pixel sink stays mapped, so a populate racing this
+    // still reads live memory - and it is what silences the frame callback,
     // so nothing marks a frame available on the texture cleared below.
     if (core_ != nullptr) {
       core_->Dispose();
@@ -435,9 +447,19 @@ class LinuxVlcPlayer {
   }
 
  private:
+  // Where a snapshot is admitted (FORK.md 37): on the main thread, where a
+  // command's own snapshot runs at once and the pump's queued ones run
+  // later, so only there do the two meet in the order they will reach Dart.
+  struct SnapshotGate {
+    vlc_player::VlcSnapshotOrder order;  // main thread only
+  };
+
   struct EventPayload {
     FlEventChannel* channel;
     FlValue* event;
+    vlc_player::VlcSnapshot snapshot;
+    bool force;
+    std::shared_ptr<SnapshotGate> gate;
   };
 
   template <typename Operation>
@@ -449,7 +471,12 @@ class LinuxVlcPlayer {
 
   static gboolean SendEventOnMain(gpointer data) {
     auto* payload = static_cast<EventPayload*>(data);
-    fl_event_channel_send(payload->channel, payload->event, nullptr, nullptr);
+    // A snapshot the pump queued runs after one a command sent at once on
+    // this thread: one older than the last delivered, or saying what it
+    // said, is not delivered (FORK.md 37).
+    if (payload->gate->order.Admit(payload->snapshot, payload->force)) {
+      fl_event_channel_send(payload->channel, payload->event, nullptr, nullptr);
+    }
     fl_value_unref(payload->event);
     g_object_unref(payload->channel);
     delete payload;
@@ -478,23 +505,20 @@ class LinuxVlcPlayer {
     }
 
     const vlc_player::VlcSnapshot snapshot = core_->Snapshot();
-    {
-      std::lock_guard<std::mutex> lock(snapshot_mutex_);
-      if (!force && has_last_sent_snapshot_ &&
-          snapshot == last_sent_snapshot_) {
-        return;
-      }
-      last_sent_snapshot_ = snapshot;
-      has_last_sent_snapshot_ = true;
-    }
 
     FlValue* event = fl_value_new_map();
+    // Dart applies none older than the last it applied (FORK.md 37).
+    fl_value_set_string_take(
+        event, "sequence",
+        fl_value_new_int(static_cast<int64_t>(snapshot.sequence)));
     fl_value_set_string_take(event, "state",
                              fl_value_new_string(snapshot.state.c_str()));
     fl_value_set_string_take(event, "position",
                              fl_value_new_int(snapshot.position));
     fl_value_set_string_take(event, "duration",
                              fl_value_new_int(snapshot.duration));
+    fl_value_set_string_take(event, "positionFraction",
+                             fl_value_new_float(snapshot.position_fraction));
     fl_value_set_string_take(event, "volume", fl_value_new_int(snapshot.volume));
     fl_value_set_string_take(event, "playbackSpeed",
                              fl_value_new_float(snapshot.playback_speed));
@@ -514,6 +538,14 @@ class LinuxVlcPlayer {
                              fl_value_new_bool(snapshot.is_seekable));
     fl_value_set_string_take(event, "isLive",
                              fl_value_new_bool(snapshot.is_live));
+    fl_value_set_string_take(event, "pictureHeld",
+                             fl_value_new_bool(snapshot.picture_held));
+    if (snapshot.seek_refusals > 0) {
+      fl_value_set_string_take(event, "seekRefusals",
+                               fl_value_new_int(snapshot.seek_refusals));
+      fl_value_set_string_take(event, "seekRefusedAt",
+                               fl_value_new_int(snapshot.seek_refused_at));
+    }
     if (snapshot.video_width > 0 && snapshot.video_height > 0) {
       FlValue* video_size = fl_value_new_map();
       fl_value_set_string_take(video_size, "width",
@@ -534,9 +566,13 @@ class LinuxVlcPlayer {
       fl_value_set_string_take(event, "errorDescription",
                                fl_value_new_string(snapshot.error_description.c_str()));
     }
+    // Admitted where it is delivered, on the main thread (SendEventOnMain).
     auto* payload = new EventPayload{
         FL_EVENT_CHANNEL(g_object_ref(event_channel_)),
         event,
+        snapshot,
+        force,
+        gate_,
     };
     g_main_context_invoke(nullptr, SendEventOnMain, payload);
   }
@@ -547,12 +583,10 @@ class LinuxVlcPlayer {
   std::unique_ptr<vlc_player::VlcPlayerCore> core_;
   std::string init_error_;
   std::atomic<bool> disposed_{false};
-  std::atomic<bool> polling_{false};
   std::atomic<bool> listening_{false};
-  std::mutex snapshot_mutex_;
-  bool has_last_sent_snapshot_ = false;
-  vlc_player::VlcSnapshot last_sent_snapshot_;
-  std::thread polling_thread_;
+  // Shared with the queued deliveries, which can outlive this player.
+  std::shared_ptr<SnapshotGate> gate_ = std::make_shared<SnapshotGate>();
+  std::unique_ptr<vlc_player::VlcUpdatePump> updates_;
   int64_t texture_id_ = -1;
 };
 
@@ -726,7 +760,8 @@ static FlMethodResponse* handle_method(VlcPlayerPlugin* self,
                               ReadHeaders(arguments),
                               ReadStringList(arguments, "mediaOptions"),
                               start_position,
-                              ReadBool(arguments, "autoPlay"));
+                              ReadBool(arguments, "autoPlay"),
+                              ReadBool(arguments, "keepPicture"));
     if (error == "A non-empty uri is required.") {
       return error_response("invalid_args", error);
     }
@@ -743,6 +778,14 @@ static FlMethodResponse* handle_method(VlcPlayerPlugin* self,
                             "A non-negative position is required.");
     }
     error = player->SeekTo(position);
+  } else if (strcmp(method, "seekToFraction") == 0) {
+    double fraction = 0;
+    if (!ReadDouble(arguments, "fraction", &fraction) ||
+        !std::isfinite(fraction) || fraction < 0 || fraction > 1) {
+      return error_response("invalid_args",
+                            "A fraction within 0..1 is required.");
+    }
+    error = player->SeekToFraction(fraction);
   } else if (strcmp(method, "setVolume") == 0) {
     int64_t volume = 0;
     if (!ReadInt(arguments, "volume", &volume)) {

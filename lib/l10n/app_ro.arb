@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Calitatea nu este garantată. Sursele sunt sortate după această preferință, iar un flux cu mai multe calități rulează la ea sau la cea mai apropiată inferioară. Redarea depinde de ce oferă de fapt furnizorul.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Distribuție: {names}",
   "actorRoleMain": "Principal",
   "actorRoleSupporting": "Secundar",
-  "actorRoleBackground": "Figurant"
+  "actorRoleBackground": "Figurant",
+  "playerQuality": "Calitate",
+  "playerQualityAuto": "Automat",
+  "playerQualityAutoPlaying": "Automat · {height}",
+  "networkBufferAuto": "Automat (recomandat)",
+  "networkBufferAutoHint": "Dimensionat pentru fiecare video după debitul său și memoria acestui dispozitiv.",
+  "devQoeLog": "Jurnal QoE",
+  "devQoeLogSubtitle": "Scrie timpii de redare în jurnalul aplicației",
+  "playerGoLive": "Mergi la live",
+  "playerBehindLive": "{time} în urma transmisiunii live"
 }

@@ -59,6 +59,7 @@ class PlayerStartupView extends StatefulWidget {
     this.backdropUrl,
     this.sourceName,
     this.status,
+    this.detail,
     this.reason,
     this.attempt,
     this.rows = const <StartupRow>[],
@@ -87,6 +88,10 @@ class PlayerStartupView extends StatefulWidget {
   /// being prepared; or, once [failed], why nothing played. Null to leave the
   /// line out - with rows up, they say what is happening.
   final String? status;
+
+  /// One line under [status]: a torrent's peers, speed and what is loaded
+  /// while it is prepared. Null to leave it out.
+  final String? detail;
 
   /// Why the link before this one was given up on. Quieter than [status].
   final String? reason;
@@ -267,6 +272,7 @@ class _PlayerStartupViewState extends State<PlayerStartupView> {
     final episodeLine = widget.episodeLine;
     final sourceName = widget.sourceName;
     final status = widget.status;
+    final detail = widget.detail;
     final reason = widget.reason;
 
     return Column(
@@ -343,6 +349,19 @@ class _PlayerStartupViewState extends State<PlayerStartupView> {
                     color: Colors.white.withValues(alpha: 0.62),
                     fontSize: 14,
                     height: 1.3,
+                  ),
+                ),
+              ],
+              if (detail != null && detail.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 13,
                   ),
                 ),
               ],

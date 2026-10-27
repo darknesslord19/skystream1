@@ -120,7 +120,7 @@ void main() {
     return <String>[...?options?.cast<String>()];
   }
 
-  /// The positions the screen seeked to, in order - a reseat is one.
+  /// The positions the screen seeked to, in order.
   List<Object?> seeks() => engine
       .callsTo('seekTo')
       .map((call) => (call.arguments as Map<Object?, Object?>)['position'])
@@ -135,12 +135,15 @@ void main() {
     await settle(tester);
   }
 
-  /// The source drops for good: a source that has played is reopened first,
-  /// and when that dies before it plays, the screen moves on to the next
-  /// source in the list - another provider's copy.
+  /// The source drops for good. A source that has played is reopened after
+  /// each of the 1, 2, 4 and 8 s back-offs (a local file can't be checked),
+  /// and its fifth failure moves on to the next source in the list: another
+  /// provider's copy (spec 2).
   Future<void> failOverToNextSource(WidgetTester tester) async {
-    await failOver(tester);
-    await failOver(tester);
+    for (var i = 0; i < 5; i++) {
+      await failOver(tester);
+      await tester.pump(const Duration(seconds: 8));
+    }
   }
 
   /// The address of the media last handed to the engine.
@@ -419,12 +422,11 @@ void main() {
   });
 
   group('a track the screen puts on', () {
-    // libVLC 3 starts a track selected mid-stream at the demuxer's read
-    // point, a whole caching interval ahead of the picture, so it would be
-    // silent until the picture caught up. A seek to where the picture is
-    // refills every stream together - the panel's own pick does the same.
+    // Only selected: nothing seeks. libVLC plays it one caching interval
+    // later, a second on demand; the seek that used to follow cost a rebuffer
+    // and could land on top of a seek of the viewer's.
 
-    testWidgets('for the setting plays from where the picture is', (
+    testWidgets('for the setting is selected, and nothing seeks', (
       tester,
     ) async {
       await pumpPlayer(tester, settings: hindi);
@@ -435,17 +437,12 @@ void main() {
       ], active: 1);
 
       expect(audioSets(), <Object?>[2]);
-      expect(seeks(), <Object?>[1750]);
-      expect(
-        engine.methods.lastIndexOf('seekTo'),
-        greaterThan(engine.methods.lastIndexOf('setAudioTrack')),
-        reason: 'a flush before the switch would flush the old track',
-      );
+      expect(seeks(), isEmpty);
 
       await tester.pumpWidget(const SizedBox());
     }, variant: texturePlatform);
 
-    testWidgets('back on another copy plays from where the picture is', (
+    testWidgets('back on another copy is selected, and nothing seeks', (
       tester,
     ) async {
       await pumpPlayer(tester, preloadedStreams: sources, settings: hindi);
@@ -463,13 +460,14 @@ void main() {
       ], active: 1);
 
       expect(audioSets(), <Object?>[2]);
-      expect(seeks().skip(before), <Object?>[position]);
+      expect(seeks().skip(before), isEmpty);
 
       await tester.pumpWidget(const SizedBox());
     }, variant: texturePlatform);
 
-    testWidgets('back on another copy on Auto plays from where the picture '
-        'is', (tester) async {
+    testWidgets('back on another copy on Auto is selected, and nothing seeks', (
+      tester,
+    ) async {
       await pumpPlayer(tester, preloadedStreams: sources);
       await listAudio(tester, <Map<String, Object?>>[
         track(1, 'Track 1 - [English]'),
@@ -485,7 +483,7 @@ void main() {
       ], active: 2);
 
       expect(audioSets(), <Object?>[1]);
-      expect(seeks().skip(before), <Object?>[position]);
+      expect(seeks().skip(before), isEmpty);
 
       await tester.pumpWidget(const SizedBox());
     }, variant: texturePlatform);
@@ -859,13 +857,24 @@ void main() {
       ], active: 1);
       expect(audioSets(), <Object?>[2]);
 
-      // The panel is up on the Audio tab when the source drops. The screen
-      // reopens it, and the engine has the new media and has not said so
-      // yet: the tracks the panel lists are still the outgoing media's.
+      // The panel is up on the Audio tab when the source drops. Recovery
+      // parks it, and after its 1 s back-off reopens it; the engine has the
+      // reopen's media and has not said so yet: the tracks the panel lists
+      // are still the outgoing media's.
       await openPanel(tester, (await english()).audio);
+      await engine.emit(<String, Object?>{
+        'state': 'error',
+        'errorDescription': 'the socket closed',
+      });
+      await tester.pump(const Duration(milliseconds: 100));
       final opening = engine.holdNextReply('setSource');
-      await failOver(tester);
-      expect(engine.callsTo('setSource'), hasLength(2));
+      await tester.pump(const Duration(seconds: 1));
+      await settle(tester);
+      expect(
+        engine.callsTo('setSource'),
+        hasLength(3),
+        reason: 'the first open, the park, and the reopen being held',
+      );
       await tester.tap(find.widgetWithText(PanelRow, 'Track 1 - [English]'));
       await settle(tester);
       await closePanel(tester);

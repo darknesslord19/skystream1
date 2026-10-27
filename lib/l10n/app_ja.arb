@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API キー (オプション)",
   "enterKeyToOverrideDefault": "デフォルトを上書きするキーを入力",
   "getApiKeyFromProfile": "SubSource プロフィールから API キーを取得",
-  "qualityNotGuaranteed": "画質は保証されません。ソースは好み順に並べられますが、再生はプロバイダーの提供状況によります。",
+  "qualityNotGuaranteed": "画質は保証されません。ソースはこの設定の順に並び、複数の画質がある配信はこの画質、またはそれ以下で最も近い画質で再生されます。再生はプロバイダーが実際に提供する内容によります。",
   "keepSourcesOriginalOrder": "ソースの元の順序を維持する",
   "openLink": "リンクを開く",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "キャスト：{names}",
   "actorRoleMain": "メイン",
   "actorRoleSupporting": "サブ",
-  "actorRoleBackground": "モブ"
+  "actorRoleBackground": "モブ",
+  "playerQuality": "画質",
+  "playerQualityAuto": "自動",
+  "playerQualityAutoPlaying": "自動 · {height}",
+  "networkBufferAuto": "自動（推奨）",
+  "networkBufferAutoHint": "動画ごとに、そのビットレートとこのデバイスのメモリに合わせてサイズを決めます。",
+  "devQoeLog": "QoE ログ",
+  "devQoeLogSubtitle": "再生のタイミングをアプリのログに書き込みます",
+  "playerGoLive": "ライブに戻る",
+  "playerBehindLive": "ライブから {time} 遅れ"
 }

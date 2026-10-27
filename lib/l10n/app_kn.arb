@@ -394,7 +394,7 @@
   "apiKeyOptionalOverride": "API ಕೀ (ಐಚ್ಛಿಕ ಅತಿಕ್ರಮಣ)",
   "enterKeyToOverrideDefault": "ಡೀಫಾಲ್ಟ್ ಅತಿಕ್ರಮಿಸಲು ಕೀಲಿಯನ್ನು ನಮೂದಿಸಿ",
   "getApiKeyFromProfile": "SubSource ಪ್ರೊಫೈಲ್‌ನಿಂದ ನಿಮ್ಮ API ಕೀಲಿಯನ್ನು ಪಡೆಯಿರಿ",
-  "qualityNotGuaranteed": "ಗುಣಮಟ್ಟದ ಭರವಸೆ ಇಲ್ಲ. ಮೂಲಗಳನ್ನು ಆದ್ಯತೆಯ ಮೇರೆಗೆ ವಿಂಗಡಿಸಲಾಗಿದೆ, ಆದರೆ ಪ್ಲೇಬ್ಯಾಕ್ ಪ್ರದಾನಿಯು ವಾಸ್ತವವಾಗಿ ಏನು ನೀಡುತ್ತಾರೆ ಎಂಬುದರ ಮೇಲೆ ಅವಲಂಬಿತವಾಗಿರುತ್ತದೆ.",
+  "qualityNotGuaranteed": "ಗುಣಮಟ್ಟದ ಭರವಸೆ ಇಲ್ಲ. ಮೂಲಗಳನ್ನು ಈ ಆದ್ಯತೆಯ ಪ್ರಕಾರ ವಿಂಗಡಿಸಲಾಗುತ್ತದೆ, ಮತ್ತು ಹಲವು ಗುಣಮಟ್ಟಗಳಿರುವ ಸ್ಟ್ರೀಮ್ ಈ ಗುಣಮಟ್ಟದಲ್ಲಿ ಅಥವಾ ಇದಕ್ಕಿಂತ ಕಡಿಮೆ ಇರುವ ಅತಿ ಹತ್ತಿರದ ಗುಣಮಟ್ಟದಲ್ಲಿ ಪ್ಲೇ ಆಗುತ್ತದೆ. ಪ್ಲೇಬ್ಯಾಕ್ ಪೂರೈಕೆದಾರರು ವಾಸ್ತವವಾಗಿ ಏನು ನೀಡುತ್ತಾರೆ ಎಂಬುದನ್ನು ಅವಲಂಬಿಸಿರುತ್ತದೆ.",
   "keepSourcesOriginalOrder": "ಮೂಲಗಳನ್ನು ಮೂಲ ಕ್ರಮದಲ್ಲಿ ಇರಿಸಿ",
   "openLink": "ಲಿಂಕ್ ತೆರೆಯಿರಿ",
   "@loggedInAs": {
@@ -544,6 +544,10 @@
   "playerSourceOpening": "ತೆರೆಯಲಾಗುತ್ತಿದೆ…",
   "playerSourceNotChecked": "ಪರಿಶೀಲಿಸಿಲ್ಲ",
   "playerReasonNoAnswer": "ಲಿಂಕ್‌ನಿಂದ ಉತ್ತರ ಬಂದಿಲ್ಲ",
+  "playerReconnecting": "ಮರುಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿದೆ…",
+  "playerPreparingTorrent": "ಟೊರೆಂಟ್ ಸಿದ್ಧವಾಗುತ್ತಿದೆ…",
+  "playerTorrentPeers": "{connected}/{total} ಪೀರ್‌ಗಳು · {speed} · {loaded} ಲೋಡ್ ಆಗಿದೆ",
+  "playerWaitingForNetwork": "ನೆಟ್‌ವರ್ಕ್‌ಗಾಗಿ ಕಾಯಲಾಗುತ್ತಿದೆ…",
   "playerSourceUnplayable": "ಪ್ಲೇ ಆಗಲಿಲ್ಲ",
   "playerSourceCannotSeek": "ಸೀಕ್ ಆಗುವುದಿಲ್ಲ",
   "playerSourceNotVideo": "ವೀಡಿಯೊ ಅಲ್ಲ",
@@ -646,5 +650,14 @@
   "castLine": "ಪಾತ್ರವರ್ಗ: {names}",
   "actorRoleMain": "ಮುಖ್ಯ",
   "actorRoleSupporting": "ಪೋಷಕ",
-  "actorRoleBackground": "ಗೌಣ"
+  "actorRoleBackground": "ಗೌಣ",
+  "playerQuality": "ಗುಣಮಟ್ಟ",
+  "playerQualityAuto": "ಸ್ವಯಂ",
+  "playerQualityAutoPlaying": "ಸ್ವಯಂ · {height}",
+  "networkBufferAuto": "ಸ್ವಯಂ (ಶಿಫಾರಸು ಮಾಡಲಾಗಿದೆ)",
+  "networkBufferAutoHint": "ಪ್ರತಿ ವೀಡಿಯೊಗೆ ಅದರ ಬಿಟ್‌ರೇಟ್ ಮತ್ತು ಈ ಸಾಧನದ ಮೆಮೊರಿಗೆ ತಕ್ಕಂತೆ ಗಾತ್ರ ನಿರ್ಧರಿಸಲಾಗುತ್ತದೆ.",
+  "devQoeLog": "QoE ಲಾಗ್",
+  "devQoeLogSubtitle": "ಪ್ಲೇಬ್ಯಾಕ್ ಸಮಯಗಳನ್ನು ಆ್ಯಪ್ ಲಾಗ್‌ಗೆ ಬರೆಯುತ್ತದೆ",
+  "playerGoLive": "ಲೈವ್‌ಗೆ ಹೋಗಿ",
+  "playerBehindLive": "ಲೈವ್‌ಗಿಂತ {time} ಹಿಂದೆ"
 }

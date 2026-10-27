@@ -1389,7 +1389,7 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'الجودة غير مضمونة. يتم فرز المصادر حسب التفضيل، ولكن التشغيل يعتمد على ما يقدمه المزود بالفعل.';
+      'الجودة غير مضمونة. تُرتَّب المصادر حسب هذا التفضيل، والبث الذي يوفر عدة جودات يُشغَّل بها أو بأقرب جودة أدنى منها. يعتمد التشغيل على ما يقدمه المزود فعلاً.';
 
   @override
   String get keepSourcesOriginalOrder => 'الحفاظ على المصادر في ترتيبها الأصلي';
@@ -1517,6 +1517,16 @@ class AppLocalizationsAr extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1561,6 +1571,9 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2394,6 +2407,38 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'هامشي';
+
+  @override
+  String get playerQuality => 'الجودة';
+
+  @override
+  String get playerQualityAuto => 'تلقائي';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'تلقائي · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'تلقائي (موصى به)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'يُحدَّد لكل فيديو حسب معدل البت وذاكرة هذا الجهاز.';
+
+  @override
+  String get devQoeLog => 'سجل QoE';
+
+  @override
+  String get devQoeLogSubtitle => 'يكتب توقيتات التشغيل في سجل التطبيق';
+
+  @override
+  String get playerGoLive => 'الانتقال إلى البث المباشر';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'متأخر $time عن البث المباشر';
+  }
 }
 
 /// The translations for Arabic (`ar_apc`).
@@ -3684,7 +3729,7 @@ class AppLocalizationsArApc extends AppLocalizationsAr {
 
   @override
   String get qualityNotGuaranteed =>
-      'الجودة غير مضمونة. يتم فرز المصادر حسب التفضيل، ولكن التشغيل يعتمد على ما يقدمه المزود بالفعل.';
+      'الجودة مش مضمونة. المصادر بتترتب حسب هالتفضيل، والبث اللي فيه كذا جودة بيشتغل عليها أو على أقرب جودة أقل منها. التشغيل بيعتمد على شو بيقدّم المزوّد فعلاً.';
 
   @override
   String get keepSourcesOriginalOrder => 'الحفاظ على المصادر في ترتيبها الأصلي';
@@ -3800,4 +3845,36 @@ class AppLocalizationsArApc extends AppLocalizationsAr {
 
   @override
   String get actorRoleBackground => 'هامشي';
+
+  @override
+  String get playerQuality => 'الجودة';
+
+  @override
+  String get playerQualityAuto => 'تلقائي';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'تلقائي · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'تلقائي (منصوح فيه)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'بيتحدد لكل فيديو حسب معدل البت وذاكرة هالجهاز.';
+
+  @override
+  String get devQoeLog => 'سجل QoE';
+
+  @override
+  String get devQoeLogSubtitle => 'بيكتب توقيتات التشغيل بسجل التطبيق';
+
+  @override
+  String get playerGoLive => 'روح عالبث المباشر';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'متأخر $time عن البث المباشر';
+  }
 }

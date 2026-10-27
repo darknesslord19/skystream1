@@ -5,6 +5,10 @@
 library;
 
 import 'package:flutter/foundation.dart' show TargetPlatform;
+import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show immutable;
+import 'package:vlc_player/vlc_player.dart'
+    show VlcAudioInterruption, VlcMediaStats, VlcPlaybackState;
 
 import '../../../core/providers/device_info_provider.dart';
 import 'stream_resolver.dart' show ProbeOutcome;
@@ -59,10 +63,10 @@ const Duration kStallRecoverAfterSeek = Duration(seconds: 40);
 /// dead, and the failover ladder has others to try.
 const Duration kStallRecoverWhileArrivingAfter = Duration(seconds: 60);
 
-/// How long a source may take, from the moment it starts opening, to show its
-/// first picture before it is given up on.
+/// How long a source may go, from the moment it starts opening, without a
+/// sign of progress before it is given up on: see [FirstFrameWatch].
 ///
-/// Counted by the attempt's own clock rather than by the stall watchdog: the
+/// Counted by the attempt's own watch rather than by the stall watchdog: the
 /// watchdog stands down while the engine reports paused, stopped or ended, and
 /// before the screen reaches its playing stage, and a source stuck in any of
 /// those said "Opening…" for minutes.
@@ -96,6 +100,14 @@ const Duration kTorrentStallRecoverAfter = Duration(minutes: 3);
 ///
 /// [afterSeek] is whether the stall began with a seek, which gets
 /// [kStallNudgeAfterSeek] and [kStallRecoverAfterSeek] for its refill.
+///
+/// [adaptive] is HLS or DASH, which never get the nudge. Its seek to the
+/// frozen place makes libVLC restart every stream at the playhead's segment,
+/// throwing away the read-ahead: 4.6-5.0 MB per stall in every Part 1 and
+/// Part 2 run, on every platform. Predictive then chooses a rendition from
+/// the emptied buffer, a rung lower, and the seek lands up to a segment early
+/// (SkyStream's research, 2026-10-15). A stall that ends needs nothing:
+/// libVLC's own download carries on when the data does.
 StallAction stallActionFor({
   required Duration stalledFor,
   required bool hadFrames,
@@ -103,6 +115,7 @@ StallAction stallActionFor({
   Duration recoverAfter = kStallRecoverAfter,
   bool arriving = false,
   bool afterSeek = false,
+  bool adaptive = false,
 }) {
   var giveUpAfter = recoverAfter;
   if (afterSeek && giveUpAfter < kStallRecoverAfterSeek) {
@@ -117,12 +130,327 @@ StallAction stallActionFor({
   // Nothing has been decoded yet, so there is no position to seek back to and
   // no demuxer to unstick. Waiting out the deadline is the only move.
   if (!hadFrames) return StallAction.none;
-  if (arriving) return StallAction.none;
+  if (arriving || adaptive) return StallAction.none;
   final nudgeAfter = afterSeek ? kStallNudgeAfterSeek : kStallNudgeAfter;
   if (stalledFor >= nudgeAfter && lastAction == StallAction.none) {
     return StallAction.nudge;
   }
   return StallAction.none;
+}
+
+/// The stall watchdog's clock (spec 2, *Detection*): how long, on the wall
+/// clock, the position has stood still.
+///
+/// A minute the device slept counts as a minute, so a connection that died
+/// while a laptop slept is caught the moment it wakes. A clock set back counts
+/// as nothing. And a jump over playback that moved counts as nothing either: a
+/// position that changed since the last tick starts the count again, however
+/// much time the clock says passed. An NTP correction or a television leaving
+/// standby with playback running is not a stall.
+class StallClock {
+  DateTime? _lastTick;
+  Duration? _position;
+  Duration _stalledFor = Duration.zero;
+
+  Duration get stalledFor => _stalledFor;
+
+  /// One watchdog tick, with the position playback is at. True when it moved
+  /// since the last tick.
+  bool tick(Duration position) {
+    final now = clock.now();
+    final last = _lastTick;
+    _lastTick = now;
+    final moved = _position != null && position != _position;
+    _position = position;
+    if (moved) {
+      _stalledFor = Duration.zero;
+      return true;
+    }
+    if (last == null) return false;
+    final elapsed = now.difference(last);
+    if (elapsed > Duration.zero) _stalledFor += elapsed;
+    return false;
+  }
+
+  /// Starts the count again from now: the position moved between ticks, a
+  /// seek was asked for, or playback stopped being expected. The time before
+  /// it is nobody's stall: ten minutes paused is not ten minutes stalled the
+  /// moment play resumes.
+  void restart() {
+    _lastTick = clock.now();
+    _stalledFor = Duration.zero;
+  }
+
+  /// Forgets everything, for a new attempt.
+  void reset() {
+    _lastTick = null;
+    _position = null;
+    _stalledFor = Duration.zero;
+  }
+}
+
+/// The byte count that says a source is still delivering: the demuxer's for
+/// HLS and DASH, whose segments libVLC's adaptive module downloads itself
+/// while the input's access reads only the master playlist (`access.c`, 3.0.24),
+/// and the access's for everything else.
+int arrivalBytesOf(VlcMediaStats stats, {required bool adaptive}) =>
+    adaptive ? stats.demuxReadBytes : stats.readBytes;
+
+/// How far the clock may run past the last picture decoded before a video is
+/// starved.
+const Duration kVideoStarvedAfter = Duration(seconds: 3);
+
+/// How close to the end a frozen picture is left alone: a video track may
+/// stop a moment before the audio does.
+const Duration kStarvedNearEnd = Duration(seconds: 5);
+
+/// The slowest a video's pictures may have been coming, in pictures per second
+/// of playback, for a gap in them to be starving. A slideshow, or a still
+/// image over a radio stream, changes picture less often than
+/// [kVideoStarvedAfter] and is fed for all that.
+const double kStarvedMinPictureRate = 2;
+
+/// How much playback the pictures' rate is read across: long enough that the
+/// trickle a starving video's last pictures come at is a small part of it.
+const Duration kStarvedRateWindow = Duration(seconds: 5);
+
+/// Watches for a picture frozen while the sound plays on (plan note 5).
+///
+/// libVLC 3 downloads an HLS or DASH stream's video and audio apart, and a
+/// stream ends for good when one segment download fails (`Streams.cpp`,
+/// 3.0.24). In every Part 1 and Part 2 drop20-hls run on macOS, iOS, Windows
+/// and Linux, the picture froze 10-16 s after the cut while 84-108 s of
+/// buffered audio carried the clock on. Neither the stall watchdog nor
+/// [videoHealthFor] can see it: the position moves, and libVLC re-displays
+/// its last picture every 80 ms and counts each one as displayed. Decoded
+/// pictures can't lie: the decoder had nothing new to decode.
+///
+/// For media with a video track, on adaptive media only. A file's video and
+/// audio come from one read, so one can't starve alone.
+class StarvedVideoWatch {
+  int? _decoded;
+  Duration? _pictureAt;
+  Duration? _lastPosition;
+
+  /// Where new pictures came, over the last [kStarvedRateWindow] of playback.
+  final _recent = <({Duration position, int decoded})>[];
+
+  /// The rate the pictures came at across the last [kStarvedRateWindow] of
+  /// playback. Not across the last gap between new ones: a starving video's
+  /// last pictures trickle in, and on macOS its last 2 came over a second of
+  /// sound, which read as a slideshow and was never convicted (P1 Part 3).
+  double? _rate;
+
+  /// One sample on a tick where the position moved. Returns where the
+  /// picture stopped once the clock has run [kVideoStarvedAfter] past it
+  /// with nothing new decoded; null otherwise.
+  ///
+  /// [running] is false while the player is paused or stalled, which decodes
+  /// nothing for a reason of its own. [remaining] is the time left to the
+  /// end, when the length is known.
+  Duration? sample({
+    required int decodedVideo,
+    required Duration position,
+    required bool running,
+    Duration? remaining,
+  }) {
+    final last = _lastPosition;
+    _lastPosition = position;
+    // A jump is a seek, or ticks missed: the count starts again from where
+    // playback is, so the refill after a seek is never read as starving.
+    final jumped =
+        last != null &&
+        (position < last || position - last > const Duration(seconds: 5));
+    final decoded = _decoded;
+    final pictureAt = _pictureAt;
+    if (decoded == null || decodedVideo > decoded || jumped) {
+      // Positions before a jump don't measure playback after it.
+      if (jumped) _recent.clear();
+      _recent
+        ..add((position: position, decoded: decodedVideo))
+        ..removeWhere((x) => position - x.position > kStarvedRateWindow);
+      final first = _recent.first;
+      final span = position - first.position;
+      if (!jumped &&
+          decoded != null &&
+          decodedVideo > decoded &&
+          span >= const Duration(seconds: 1)) {
+        _rate =
+            (decodedVideo - first.decoded) *
+            Duration.microsecondsPerSecond /
+            span.inMicroseconds;
+      }
+      _decoded = decodedVideo;
+      _pictureAt = position;
+      return null;
+    }
+    // A backend whose counter never moved has no rate, and is never convicted
+    // on its zeroes; nor is a video whose pictures came slowly anyway.
+    final rate = _rate;
+    if (rate == null || rate < kStarvedMinPictureRate || !running) return null;
+    if (remaining != null && remaining <= kStarvedNearEnd) return null;
+    return position - pictureAt! >= kVideoStarvedAfter ? pictureAt : null;
+  }
+
+  /// Forgets everything, for a new attempt.
+  void reset() {
+    _decoded = null;
+    _pictureAt = null;
+    _lastPosition = null;
+    _recent.clear();
+    _rate = null;
+  }
+}
+
+/// Whether an end at [position] is a failure dressed as one (spec 2: "libVLC
+/// says 'ended' more than 2 s before the known duration"): short of the
+/// [duration], a truncated download; or with no duration at all, which can't
+/// be measured, and "cannot tell" is treated as a failure so recovery still
+/// gets its turn.
+bool isFalseEnd({required Duration position, required Duration duration}) =>
+    duration <= Duration.zero ||
+    position < duration - const Duration(seconds: 2);
+
+/// Whether a move to paused or stopped is one nobody asked for (spec 2,
+/// *Detection*), which counts as a failure.
+///
+/// Asked for, it isn't: the viewer's pause or stop, the background policy's
+/// pause and the app's own stop all count in the controller's
+/// `pauseRequests` ([pauseRequests] moved since playback last ran,
+/// [pauseRequestsWhenRunning]). An audio interruption pauses the engine
+/// itself, and says so in [interruption]. With the app away ([foreground]
+/// false) the platform may pause for reasons nobody reports. What is left is
+/// macOS's pause at the end of a dropped connection's buffer (VLCKit's
+/// `--play-and-pause`), and Android's stop after an error.
+bool isUnaskedStop({
+  required VlcPlaybackState state,
+  required int pauseRequests,
+  required int pauseRequestsWhenRunning,
+  required VlcAudioInterruption interruption,
+  required bool foreground,
+}) =>
+    (state == VlcPlaybackState.paused || state == VlcPlaybackState.stopped) &&
+    pauseRequests == pauseRequestsWhenRunning &&
+    interruption == VlcAudioInterruption.none &&
+    foreground;
+
+/// How long a wait over the picture keeps the display awake: past it, a wait
+/// that may never end lets the phone sleep.
+const Duration kWaitKeepsAwakeFor = Duration(minutes: 30);
+
+/// The longest an open may take, progress or not, before it is given up on.
+/// The same as [kStallRecoverWhileArrivingAfter]: room for the slowest start
+/// worth waiting for, and no more.
+const Duration kFirstFrameCap = Duration(seconds: 60);
+
+/// What an opening attempt has to show for itself at one tick.
+@immutable
+class OpeningSample {
+  const OpeningSample({
+    this.state,
+    this.prebuffer,
+    this.readBytes = 0,
+    this.demuxReadBytes = 0,
+    this.decodedVideo = 0,
+    this.decodedAudio = 0,
+    this.startGated = false,
+  });
+
+  final VlcPlaybackState? state;
+
+  /// libVLC's prebuffer, 0..1, while it fills.
+  final double? prebuffer;
+
+  final int readBytes;
+  final int demuxReadBytes;
+  final int decodedVideo;
+  final int decodedAudio;
+
+  /// Android: a play waiting at the font start gate (FORK.md 26), which is the
+  /// app's wait, not the source's.
+  final bool startGated;
+
+  @override
+  String toString() =>
+      'OpeningSample(state: ${state?.name}, prebuffer: $prebuffer, '
+      'read: $readBytes, demuxed: $demuxReadBytes, video: $decodedVideo, '
+      'audio: $decodedAudio, gated: $startGated)';
+}
+
+/// Whether to go on waiting for an opening attempt's first picture.
+enum FirstFrameVerdict { wait, giveUp }
+
+/// The first-frame deadline, counted from progress (the findings' Part 3:
+/// "the 30 s 'never started' deadline can fire just as a slow start
+/// succeeds").
+///
+/// On the TV emulator libVLC joined a live stream, sent nothing for 29 s, then
+/// fetched four segments and showed its first picture; the deadline, counted
+/// from the open, threw that picture away a second later. Counted from the
+/// last sign of progress, a start that is getting somewhere is left to finish,
+/// up to [kFirstFrameCap]. Torrents keep [kTorrentStallRecoverAfter] from
+/// the open: their progress is pieces arriving, which the engine can't see.
+class FirstFrameWatch {
+  FirstFrameWatch({this.torrent = false}) {
+    restart();
+  }
+
+  final bool torrent;
+
+  late DateTime _openedAt;
+  late DateTime _progressAt;
+  OpeningSample _last = const OpeningSample();
+
+  /// Starts again from now: a new attempt, or a wait that was nobody's (the
+  /// app off screen, a remounted player).
+  void restart() {
+    _openedAt = _progressAt = clock.now();
+    _last = const OpeningSample();
+  }
+
+  /// Records [sample]. True when it shows progress since the last one: the
+  /// state moving on, the prebuffer appearing or rising, any byte or decoder
+  /// count rising, or Android's start gate holding the play.
+  bool sample(OpeningSample sample) {
+    final last = _last;
+    _last = sample;
+    final prebuffer = sample.prebuffer;
+    final progress =
+        _rank(sample.state) > _rank(last.state) ||
+        (prebuffer != null && prebuffer > (last.prebuffer ?? -1)) ||
+        sample.readBytes > last.readBytes ||
+        sample.demuxReadBytes > last.demuxReadBytes ||
+        sample.decodedVideo > last.decodedVideo ||
+        sample.decodedAudio > last.decodedAudio ||
+        sample.startGated;
+    if (progress) _progressAt = clock.now();
+    // A play the gate holds hasn't started: the cap counts from its opening
+    // (up to 60 s on a slow device, FORK.md 26).
+    if (sample.startGated) _openedAt = clock.now();
+    return progress;
+  }
+
+  FirstFrameVerdict get verdict {
+    final now = clock.now();
+    final open = now.difference(_openedAt);
+    if (torrent) {
+      return open >= kTorrentStallRecoverAfter
+          ? FirstFrameVerdict.giveUp
+          : FirstFrameVerdict.wait;
+    }
+    if (open >= kFirstFrameCap ||
+        now.difference(_progressAt) >= kFirstFrameDeadline) {
+      return FirstFrameVerdict.giveUp;
+    }
+    return FirstFrameVerdict.wait;
+  }
+
+  static int _rank(VlcPlaybackState? state) => switch (state) {
+    VlcPlaybackState.opening => 1,
+    VlcPlaybackState.buffering => 2,
+    VlcPlaybackState.playing || VlcPlaybackState.paused => 3,
+    _ => 0,
+  };
 }
 
 /// The next candidate to open after [from], or null once every one has had a
@@ -404,4 +732,63 @@ int? stepDownFrom(int cap) {
   }
   if (below == null || below < kMinRenditionHeight) return null;
   return below;
+}
+
+/// The `--adaptive-maxheight` a source is opened with.
+///
+/// [pick] is the viewer's choice from the player's Quality tab, null for
+/// Auto. It is taken as it is - above the device's own rung too, which a
+/// media option may do - and [stepDownFrom] still lowers it for a device
+/// that cannot keep up.
+///
+/// Auto is the smaller of [deviceCap], the device's rung lowered by any
+/// step-down ([adaptiveMaxHeightFor]), and [preferenceHeight], the height of
+/// the Wi-Fi or mobile data quality preference in force (null for Any). A
+/// preference below a stream's lowest rendition plays that lowest one.
+int renditionCapFor({
+  required int deviceCap,
+  int? pick,
+  int? preferenceHeight,
+}) {
+  if (pick != null) return pick;
+  if (preferenceHeight != null && preferenceHeight < deviceCap) {
+    return preferenceHeight;
+  }
+  return deviceCap;
+}
+
+/// Whether a video that stopped showing pictures gets one reopen decoding in
+/// software (spec 1.6): only on Android, where the hardware switch reaches
+/// the decoder, only while hardware decoding is in force, and once.
+///
+/// What it answers is MediaCodec dying mid-play, which the video health check
+/// sees as no pictures while the clock runs on. Pictures the video output
+/// dropped in that window ([lostInWindow] above 0) were decoded, so the
+/// decoder is alive and it is the output that failed (Android's surface
+/// stall): software decoding would bring no picture back, so that goes the
+/// ordinary way. So does a second failure.
+bool shouldRetryInSoftware({
+  required TargetPlatform platform,
+  required bool hardwareDecoding,
+  required bool alreadySoftware,
+  required int lostInWindow,
+}) =>
+    platform == TargetPlatform.android &&
+    hardwareDecoding &&
+    !alreadySoftware &&
+    lostInWindow <= 0;
+
+/// The rendition cap once the CPU decodes: what [adaptiveMaxHeightFor] gives
+/// with no hardware decoder, and never above [currentCap].
+int softwareRetryCap({
+  required DeviceTier tier,
+  required int panelHeightPx,
+  required int currentCap,
+}) {
+  final software = adaptiveMaxHeightFor(
+    tier: tier,
+    panelHeightPx: panelHeightPx,
+    hardwareDecode: false,
+  );
+  return software < currentCap ? software : currentCap;
 }

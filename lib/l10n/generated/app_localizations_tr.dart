@@ -1385,7 +1385,7 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Kalite garanti edilmez. Kaynaklar bu tercihe göre sıralanır ve birden fazla kalite sunan bir yayın bu kalitede ya da altındaki en yakın kalitede oynatılır. Oynatma, sağlayıcının gerçekte ne sunduğuna bağlıdır.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1513,6 +1513,16 @@ class AppLocalizationsTr extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1557,6 +1567,9 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2390,4 +2403,37 @@ class AppLocalizationsTr extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Figüran';
+
+  @override
+  String get playerQuality => 'Kalite';
+
+  @override
+  String get playerQualityAuto => 'Otomatik';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Otomatik · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Otomatik (önerilen)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Her video için bit hızına ve bu cihazın belleğine göre boyutlandırılır.';
+
+  @override
+  String get devQoeLog => 'QoE günlüğü';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Oynatma zamanlamalarını uygulama günlüğüne yazar';
+
+  @override
+  String get playerGoLive => 'Canlıya git';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'Canlıdan $time geride';
+  }
 }

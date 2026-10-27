@@ -54,6 +54,25 @@ NS_ASSUME_NONNULL_BEGIN
 /// has no drawable, so it reports 0 or a stale value.
 @property(nonatomic, readonly) CGSize codedSize;
 
+/// Moves libVLC's video callbacks to `mediaPlayer`, a fresh player for the
+/// next source, keeping this texture, its frames and its pool. The old
+/// player's late callbacks become no-ops. Like the initializer, must be called
+/// before that player is given media. Nothing once detached.
+- (void)attachToMediaPlayer:(VLCMediaPlayer *)mediaPlayer;
+
+/// Keeps the picture on screen now, whatever libVLC decodes next, until
+/// releasePicture. NO, holding nothing, before the first picture. See
+/// vlc_picture_hold.h for why a reopen holds.
+- (BOOL)holdPicture;
+
+/// Lets the hold go at the next picture libVLC finishes, and shows that one.
+- (void)releasePicture;
+
+/// Whether the texture still shows a held picture: the pixels' state, which a
+/// change of source holds as a bridge too. The plugin reports
+/// VlcPlayerEvents.pictureHeld, the hold decision (FORK.md 30).
+@property(nonatomic, readonly) BOOL pictureHeld;
+
 /// Stops libVLC calling in and drops every retained frame. Idempotent, and
 /// required before the media player is torn down.
 - (void)detach;

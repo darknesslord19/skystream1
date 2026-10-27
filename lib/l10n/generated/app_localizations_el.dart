@@ -1391,7 +1391,7 @@ class AppLocalizationsEl extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Η ποιότητα δεν είναι εγγυημένη. Οι πηγές ταξινομούνται με βάση αυτή την προτίμηση, και μια ροή με πολλές ποιότητες παίζει σε αυτήν ή στην πλησιέστερη χαμηλότερη. Η αναπαραγωγή εξαρτάται από το τι προσφέρει πραγματικά ο πάροχος.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1520,6 +1520,16 @@ class AppLocalizationsEl extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1564,6 +1574,9 @@ class AppLocalizationsEl extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2397,4 +2410,37 @@ class AppLocalizationsEl extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Κομπάρσος';
+
+  @override
+  String get playerQuality => 'Ποιότητα';
+
+  @override
+  String get playerQualityAuto => 'Αυτόματο';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Αυτόματο · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Αυτόματο (προτείνεται)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Προσαρμόζεται σε κάθε βίντεο με βάση τον ρυθμό bit του και τη μνήμη αυτής της συσκευής.';
+
+  @override
+  String get devQoeLog => 'Αρχείο καταγραφής QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Γράφει τους χρόνους αναπαραγωγής στο αρχείο καταγραφής της εφαρμογής';
+
+  @override
+  String get playerGoLive => 'Μετάβαση στο ζωντανό';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time πίσω από το ζωντανό';
+  }
 }

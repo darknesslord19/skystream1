@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skystream/core/domain/entity/multimedia_item.dart';
 import 'package:skystream/core/providers/device_info_provider.dart';
+import 'package:skystream/core/providers/device_memory.dart';
 import 'package:skystream/core/storage/history_repository.dart';
 import 'package:skystream/core/storage/storage_service.dart';
 import 'package:skystream/features/player/presentation/player_platform_service.dart';
@@ -35,6 +36,13 @@ import 'package:window_manager/window_manager.dart';
 /// channel to speak on to get a first frame and reach the playing stage.
 const MethodChannel _pip = MethodChannel('dev.akash.skystream.player/pip');
 const MethodChannel _vlc = MethodChannel('vlc_player');
+
+/// The screen asks before each open whether the device is on Wi-Fi, for the
+/// quality preference in force, and connectivity_plus never answers in a test
+/// unless it is told to.
+const MethodChannel _connectivity = MethodChannel(
+  'dev.fluttercommunity.plus/connectivity',
+);
 const MethodChannel _window = MethodChannel('window_manager');
 
 const int _viewId = 1;
@@ -84,6 +92,16 @@ void main() {
       SystemChannels.platform_views,
       (call) async => null,
     );
+    messenger.setMockMethodCallHandler(
+      _connectivity,
+      (call) async => <String>['wifi'],
+    );
+    // Read at every open by the buffer rule; unanswered, the open would wait
+    // for it forever. No reading: the rule falls back to the device's tier.
+    messenger.setMockMethodCallHandler(
+      deviceMemoryChannel,
+      (call) async => null,
+    );
     messenger.setMockMethodCallHandler(_window, (call) async {
       switch (call.method) {
         case 'isFullScreen':
@@ -105,6 +123,8 @@ void main() {
     messenger.setMockStreamHandler(_events, null);
     messenger.setMockMessageHandler(_wakelockToggle, null);
     messenger.setMockMethodCallHandler(SystemChannels.platform_views, null);
+    messenger.setMockMethodCallHandler(_connectivity, null);
+    messenger.setMockMethodCallHandler(deviceMemoryChannel, null);
     messenger.setMockMethodCallHandler(_window, null);
     messenger.setMockMethodCallHandler(_pip, null);
   });

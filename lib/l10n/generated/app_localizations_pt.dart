@@ -1375,7 +1375,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'A qualidade não é garantida. As fontes são ordenadas por preferência, mas dependem do que o provedor oferece.';
+      'A qualidade não é garantida. As fontes são ordenadas por esta preferência, e uma transmissão com várias qualidades é reproduzida nela ou na mais próxima abaixo. A reprodução depende do que o fornecedor realmente oferece.';
 
   @override
   String get keepSourcesOriginalOrder => 'Manter ordem original das fontes';
@@ -1503,6 +1503,16 @@ class AppLocalizationsPt extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1547,6 +1557,9 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2379,6 +2392,39 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Figurante';
+
+  @override
+  String get playerQuality => 'Qualidade';
+
+  @override
+  String get playerQualityAuto => 'Automática';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automática · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automático (recomendado)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Dimensionado para cada vídeo segundo a sua taxa de bits e a memória deste dispositivo.';
+
+  @override
+  String get devQoeLog => 'Registo de QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Escreve os tempos de reprodução no registo da aplicação';
+
+  @override
+  String get playerGoLive => 'Ir para o direto';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time atrás do direto';
+  }
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -3671,7 +3717,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get qualityNotGuaranteed =>
-      'A qualidade não é garantida. As fontes são ordenadas por preferência, mas dependem do que o provedor oferece.';
+      'A qualidade não é garantida. As fontes são ordenadas por esta preferência, e uma transmissão com várias qualidades toca nela ou na mais próxima abaixo. A reprodução depende do que o provedor realmente oferece.';
 
   @override
   String get keepSourcesOriginalOrder => 'Manter ordem original das fontes';
@@ -3788,4 +3834,37 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get actorRoleBackground => 'Figurante';
+
+  @override
+  String get playerQuality => 'Qualidade';
+
+  @override
+  String get playerQualityAuto => 'Automática';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automática · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automático (recomendado)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Dimensionado para cada vídeo pela taxa de bits dele e pela memória deste dispositivo.';
+
+  @override
+  String get devQoeLog => 'Registro de QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Grava os tempos de reprodução no registro do app';
+
+  @override
+  String get playerGoLive => 'Ir para o ao vivo';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time atrás do ao vivo';
+  }
 }

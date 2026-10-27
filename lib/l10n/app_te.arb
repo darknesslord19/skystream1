@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "నాణ్యతకు హామీ లేదు. మూలాలు ఈ ప్రాధాన్యత ప్రకారం క్రమబద్ధీకరించబడతాయి, అనేక నాణ్యతలున్న స్ట్రీమ్ ఈ నాణ్యతలో లేదా దీనికి దిగువన ఉన్న అత్యంత సమీప నాణ్యతలో ప్లే అవుతుంది. ప్లేబ్యాక్ ప్రొవైడర్ వాస్తవంగా ఏమి అందిస్తారనే దానిపై ఆధారపడి ఉంటుంది.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "నటీనటులు: {names}",
   "actorRoleMain": "ప్రధాన",
   "actorRoleSupporting": "సహాయ",
-  "actorRoleBackground": "నేపథ్య"
+  "actorRoleBackground": "నేపథ్య",
+  "playerQuality": "నాణ్యత",
+  "playerQualityAuto": "ఆటో",
+  "playerQualityAutoPlaying": "ఆటో · {height}",
+  "networkBufferAuto": "ఆటో (సిఫార్సు చేయబడింది)",
+  "networkBufferAutoHint": "ప్రతి వీడియోకు దాని బిట్‌రేట్, ఈ పరికరం మెమరీ ఆధారంగా పరిమాణం నిర్ణయించబడుతుంది.",
+  "devQoeLog": "QoE లాగ్",
+  "devQoeLogSubtitle": "ప్లేబ్యాక్ సమయాలను యాప్ లాగ్‌లో రాస్తుంది",
+  "playerGoLive": "లైవ్‌కు వెళ్లండి",
+  "playerBehindLive": "లైవ్ కంటే {time} వెనుక"
 }

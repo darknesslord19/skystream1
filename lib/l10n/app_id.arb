@@ -574,7 +574,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Kualitas tidak dijamin. Sumber diurutkan menurut preferensi ini, dan stream yang menawarkan beberapa kualitas diputar pada kualitas ini atau yang terdekat di bawahnya. Pemutaran bergantung pada apa yang benar-benar ditawarkan penyedia.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Pemeran: {names}",
   "actorRoleMain": "Utama",
   "actorRoleSupporting": "Pendukung",
-  "actorRoleBackground": "Figuran"
+  "actorRoleBackground": "Figuran",
+  "playerQuality": "Kualitas",
+  "playerQualityAuto": "Otomatis",
+  "playerQualityAutoPlaying": "Otomatis · {height}",
+  "networkBufferAuto": "Otomatis (disarankan)",
+  "networkBufferAutoHint": "Ukurannya disesuaikan untuk tiap video menurut bitrate-nya dan memori perangkat ini.",
+  "devQoeLog": "Log QoE",
+  "devQoeLogSubtitle": "Menulis waktu pemutaran ke log aplikasi",
+  "playerGoLive": "Ke siaran langsung",
+  "playerBehindLive": "{time} di belakang siaran langsung"
 }

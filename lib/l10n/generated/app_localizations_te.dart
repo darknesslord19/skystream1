@@ -1388,7 +1388,7 @@ class AppLocalizationsTe extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'నాణ్యతకు హామీ లేదు. మూలాలు ఈ ప్రాధాన్యత ప్రకారం క్రమబద్ధీకరించబడతాయి, అనేక నాణ్యతలున్న స్ట్రీమ్ ఈ నాణ్యతలో లేదా దీనికి దిగువన ఉన్న అత్యంత సమీప నాణ్యతలో ప్లే అవుతుంది. ప్లేబ్యాక్ ప్రొవైడర్ వాస్తవంగా ఏమి అందిస్తారనే దానిపై ఆధారపడి ఉంటుంది.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1516,6 +1516,16 @@ class AppLocalizationsTe extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1560,6 +1570,9 @@ class AppLocalizationsTe extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2392,4 +2405,36 @@ class AppLocalizationsTe extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'నేపథ్య';
+
+  @override
+  String get playerQuality => 'నాణ్యత';
+
+  @override
+  String get playerQualityAuto => 'ఆటో';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'ఆటో · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'ఆటో (సిఫార్సు చేయబడింది)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'ప్రతి వీడియోకు దాని బిట్‌రేట్, ఈ పరికరం మెమరీ ఆధారంగా పరిమాణం నిర్ణయించబడుతుంది.';
+
+  @override
+  String get devQoeLog => 'QoE లాగ్';
+
+  @override
+  String get devQoeLogSubtitle => 'ప్లేబ్యాక్ సమయాలను యాప్ లాగ్‌లో రాస్తుంది';
+
+  @override
+  String get playerGoLive => 'లైవ్‌కు వెళ్లండి';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'లైవ్ కంటే $time వెనుక';
+  }
 }

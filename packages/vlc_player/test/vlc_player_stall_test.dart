@@ -337,6 +337,60 @@ void main() {
   });
 
   group('seeking', () {
+    testWidgets('a seek takes a raised flag down for its first second', (
+      tester,
+    ) async {
+      // Spec 4: the first second after a committed seek shows no spinner,
+      // even when the clock was already standing still before it.
+      final controller = await running(36);
+      addTearDown(controller.dispose);
+      await harness.sendEvent(36, snapshot(position: 2000));
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+
+      await controller.seekTo(const Duration(minutes: 1));
+      expect(controller.value.isStalled, isFalse);
+
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+    });
+
+    testWidgets('a seek to where playback already is leaves the flag up', (
+      tester,
+    ) async {
+      // The player screen's stall watchdog re-issues the current position to
+      // kick a stream that stopped. That seek goes nowhere new and the
+      // picture stays frozen, so the spinner stays: spec 4's first second is
+      // for a seek to another place.
+      final controller = await running(37);
+      addTearDown(controller.dispose);
+      await harness.sendEvent(37, snapshot(position: 2000));
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+
+      await controller.seekTo(const Duration(milliseconds: 2000));
+      expect(controller.value.isStalled, isTrue);
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+    });
+
+    testWidgets('a seek sent again to the target on its way leaves it up', (
+      tester,
+    ) async {
+      // The watchdog's re-issue goes to a seek still on its way when there is
+      // one: that seek had its first second already.
+      final controller = await running(38);
+      addTearDown(controller.dispose);
+      await controller.seekTo(const Duration(minutes: 1));
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+
+      await controller.seekTo(const Duration(minutes: 1));
+      expect(controller.value.isStalled, isTrue);
+      await tester.pump(delay);
+      expect(controller.value.isStalled, isTrue);
+    });
+
     testWidgets('seekTo re-arms so the gap to the new frame shows', (
       tester,
     ) async {
@@ -472,6 +526,49 @@ void main() {
       await harness.sendEvent(42, snapshot(position: 1000));
       await tester.pump(delay);
 
+      expect(controller.value.isStalled, isTrue);
+    });
+  });
+
+  group('a clock that moves in whole-second steps', () {
+    // libVLC's HLS time, and the TV emulator's time events, move about once
+    // a second: a step a little late raised the flag and the next took it
+    // down, a 1-177 ms spinner over a playing picture (FORK.md 36).
+    testWidgets('a step a little late raises no flag', (tester) async {
+      final controller = await running(31);
+      await tester.pump(const Duration(milliseconds: 1000));
+      await harness.sendEvent(31, snapshot(position: 3000));
+      await tester.pump(const Duration(milliseconds: 1150));
+      expect(controller.value.isStalled, isFalse);
+      await harness.sendEvent(31, snapshot(position: 4000));
+      expect(controller.value.isStalled, isFalse);
+      // A moving clock keeps the watchdog armed: dispose in the body.
+      controller.dispose();
+    });
+
+    testWidgets('frozen, it raises the flag a quarter second later', (
+      tester,
+    ) async {
+      final controller = await running(32);
+      addTearDown(controller.dispose);
+      await tester.pump(const Duration(milliseconds: 1000));
+      await harness.sendEvent(32, snapshot(position: 3000));
+      await tester.pump(const Duration(milliseconds: 1249));
+      expect(controller.value.isStalled, isFalse);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(controller.value.isStalled, isTrue);
+    });
+
+    testWidgets('a clock moving every 250 ms keeps the second', (tester) async {
+      final controller = await running(33);
+      addTearDown(controller.dispose);
+      for (final position in const [2250, 2500, 2750]) {
+        await tester.pump(const Duration(milliseconds: 250));
+        await harness.sendEvent(33, snapshot(position: position));
+      }
+      await tester.pump(const Duration(milliseconds: 999));
+      expect(controller.value.isStalled, isFalse);
+      await tester.pump(const Duration(milliseconds: 1));
       expect(controller.value.isStalled, isTrue);
     });
   });

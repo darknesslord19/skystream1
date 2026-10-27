@@ -93,6 +93,14 @@ class SettingsRepository {
     return _storageService.getDevLoadAssets();
   }
 
+  Future<void> setDevQoeLog(bool enabled) async {
+    await _storageService.setDevQoeLog(enabled);
+  }
+
+  bool getDevQoeLog() {
+    return _storageService.getDevQoeLog();
+  }
+
   Future<void> setActiveProviderId(String? id) =>
       _storageService.setActiveProviderId(id);
 

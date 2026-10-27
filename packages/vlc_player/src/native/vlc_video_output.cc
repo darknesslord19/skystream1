@@ -45,6 +45,7 @@ VlcVideoOutput::VlcVideoOutput(libvlc_media_player_t* player,
     return;
   }
   attachment_->sink = sink;
+  attachment_->orphan_release = sink->orphan_release();
   libvlc_video_set_callbacks(player_, &VlcVideoOutput::LockCallback,
                              &VlcVideoOutput::UnlockCallback,
                              &VlcVideoOutput::DisplayCallback, attachment_);
@@ -179,6 +180,9 @@ void VlcVideoOutput::UnlockCallback(void* opaque,
   std::lock_guard<std::mutex> lock(attachment->mutex);
   if (attachment->sink != nullptr) {
     attachment->sink->Release(picture, planes);
+  } else if (attachment->orphan_release != nullptr && picture != nullptr) {
+    // Locked before Detach: what the lock took goes now, and not before.
+    attachment->orphan_release(picture, planes);
   }
 }
 

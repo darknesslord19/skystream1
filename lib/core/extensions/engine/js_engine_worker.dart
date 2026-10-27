@@ -1143,8 +1143,9 @@ const _kEntitiesJs = r"""
     }
   }
   class StreamResult {
-    constructor({ url, source, headers, subtitles, drmKid, drmKey, licenseUrl }) {
-      this.url = url; this.source = source || 'Auto'; this.headers = headers;
+    constructor({ url, source, quality, headers, subtitles, drmKid, drmKey, licenseUrl }) {
+      this.url = url; this.source = source || 'Auto'; this.quality = quality;
+      this.headers = headers;
       this.subtitles = subtitles; this.drmKid = drmKid;
       this.drmKey = drmKey; this.licenseUrl = licenseUrl;
     }

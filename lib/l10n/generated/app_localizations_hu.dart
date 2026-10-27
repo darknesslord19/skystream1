@@ -1377,7 +1377,7 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'A minőség nem garantált. A források e beállítás szerint rendeződnek, a több minőséget kínáló stream pedig ebben vagy a legközelebbi alacsonyabban szól. A lejátszás attól függ, mit kínál valójában a szolgáltató.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1505,6 +1505,16 @@ class AppLocalizationsHu extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1549,6 +1559,9 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2381,4 +2394,37 @@ class AppLocalizationsHu extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Statiszta';
+
+  @override
+  String get playerQuality => 'Minőség';
+
+  @override
+  String get playerQualityAuto => 'Automatikus';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automatikus · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automatikus (ajánlott)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Minden videóhoz a bitrátája és a készülék memóriája alapján méretezve.';
+
+  @override
+  String get devQoeLog => 'QoE-napló';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'A lejátszási időket az alkalmazás naplójába írja';
+
+  @override
+  String get playerGoLive => 'Ugrás az élő adáshoz';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time lemaradás az élő adáshoz képest';
+  }
 }

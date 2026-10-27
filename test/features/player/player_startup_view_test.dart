@@ -53,11 +53,13 @@ void main() {
     String? backdropUrl,
     String? logoUrl,
     String? status = 'Checking links…',
+    String? detail,
   }) => PlayerStartupView(
     title: 'A Film',
     logoUrl: logoUrl,
     backdropUrl: backdropUrl,
     status: status,
+    detail: detail,
     rows: rows,
     currentIndex: currentIndex,
     failed: failed,
@@ -105,6 +107,23 @@ void main() {
     await pump(tester, view(rows: _rows(3), currentIndex: 0));
 
     expect(find.text('Select a link to play it'), findsNothing);
+  });
+
+  testWidgets('a detail line sits under the status, on one line', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      view(
+        status: 'Preparing torrent…',
+        detail: '12/80 peers · 1.4 MB/s · 24 MB loaded',
+      ),
+    );
+    final status = tester.getTopLeft(find.text('Preparing torrent…'));
+    final detail = find.text('12/80 peers · 1.4 MB/s · 24 MB loaded');
+    expect(detail, findsOneWidget);
+    expect(tester.getTopLeft(detail).dy, greaterThan(status.dy));
+    expect(tester.widget<Text>(detail).maxLines, 1);
   });
 
   testWidgets('selecting a row plays that row', (tester) async {

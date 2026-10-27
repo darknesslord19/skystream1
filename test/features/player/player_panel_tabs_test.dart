@@ -65,10 +65,12 @@ void main() {
       int sourceCount = 0,
       int episodeCount = 0,
       int fileCount = 0,
+      int qualityCount = 0,
     }) => availablePanelTabs(
       sourceCount: sourceCount,
       episodeCount: episodeCount,
       fileCount: fileCount,
+      qualityCount: qualityCount,
     );
 
     test('Audio and Subtitles are there with nothing else at all', () {
@@ -104,11 +106,35 @@ void main() {
       expect(tabs(fileCount: 2), contains(PlayerPanelTab.files));
     });
 
+    test('one quality is not a choice, so no Quality tab', () {
+      expect(tabs(sourceCount: 1), isNot(contains(PlayerPanelTab.quality)));
+      expect(
+        tabs(sourceCount: 1, qualityCount: 1),
+        isNot(contains(PlayerPanelTab.quality)),
+        reason: 'a one-row Quality list is a dead D-pad stop',
+      );
+      expect(
+        tabs(sourceCount: 1, qualityCount: 2),
+        contains(PlayerPanelTab.quality),
+      );
+    });
+
+    test('Quality comes right after Sources', () {
+      expect(PlayerPanelTab.values.take(2), [
+        PlayerPanelTab.sources,
+        PlayerPanelTab.quality,
+      ]);
+    });
+
     test('the boundaries are the same ones PanelData reads', () {
       // The panel strip and the bottom bar both come through this getter, so
       // the thresholds have to hold on the value type too.
       expect(
-        PanelData(episodes: <Episode>[_episode(1)], files: _packFiles(1)).tabs,
+        PanelData(
+          episodes: <Episode>[_episode(1)],
+          files: _packFiles(1),
+          qualityLadder: const <int>[720],
+        ).tabs,
         <PlayerPanelTab>{PlayerPanelTab.audio, PlayerPanelTab.subtitles},
       );
       expect(
@@ -116,6 +142,7 @@ void main() {
           sources: _sources().take(1).toList(),
           episodes: <Episode>[_episode(1), _episode(2)],
           files: _packFiles(2),
+          qualityLadder: const <int>[1080, 720],
         ).tabs,
         PlayerPanelTab.values.toSet(),
       );

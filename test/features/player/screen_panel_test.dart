@@ -132,6 +132,20 @@ void main() {
       .map((row) => row.label)
       .toList();
 
+  /// The source playing fails again and again until [done]. A source that
+  /// has played is reopened after each of the 1, 2, 4 and 8 s back-offs - a
+  /// local file can't be checked - and its fifth failure fails over; one that
+  /// never played fails over at once (spec 2).
+  Future<void> failUntil(WidgetTester tester, bool Function() done) async {
+    var position = 1600;
+    for (var i = 0; i < 12 && !done(); i++) {
+      position += 100;
+      await sendEvent(tester, snapshot(state: 'error', position: position));
+      await tester.pump(const Duration(seconds: 8));
+      await settle(tester);
+    }
+  }
+
   /// Opens the panel from the bottom bar, the way a remote does, and waits
   /// out the slide-in.
   Future<void> openFromBar(WidgetTester tester, String tooltip) async {
@@ -498,22 +512,29 @@ void main() {
   );
 
   testWidgets(
-    'the torrent server gets the buffer the viewer chose, split to keep some '
-    'of it behind the playhead',
+    'a torrent hands TorrServer the size the viewer picked, split to keep '
+    'some of it behind the playhead',
     variant: texturePlatform,
     (tester) async {
-      // One number for both engines. libVLC takes it as a prefetch window and
-      // TorrServer as its piece cache; the cache used to be a hard-coded
-      // 64 MB, so the setting moved one engine and not the other.
+      // TorrServer holds a torrent's pieces and libVLC reads them through it,
+      // so both engines get a buffer, and a size the viewer picked is meant
+      // for both.
       final torrents = _FakeTorrents();
       await pumpPlayer(
         tester,
-        settings: const PlayerSettings(networkBufferMb: 256),
+        preloadedStreams: const <StreamResult>[
+          StreamResult(
+            url: 'magnet:?xt=urn:btih:film',
+            source: 'Torrent 1080p',
+            providerName: 'T',
+          ),
+        ],
+        settings: const PlayerSettings(bufferOverrideMb: 256),
         overrides: [torrentServiceProvider.overrideWithValue(torrents)],
       );
       await sendFirstFrame(tester);
 
-      expect(torrents.cacheMb, 256, reason: 'the chosen size, not a constant');
+      expect(torrents.cacheMb, 256, reason: 'the size picked, not a constant');
       expect(
         torrents.readAheadPercent,
         torrentReadAheadPercent(256),
@@ -527,6 +548,58 @@ void main() {
         greaterThanOrEqualTo(8),
         reason: 'enough for the ten second step the seek controls take',
       );
+      expect(
+        torrents.calls,
+        <String>['buffer', 'url'],
+        reason:
+            "the sizes reach the service before the torrent is added: "
+            "TorrServer's write drops every torrent it holds",
+      );
+
+      await sendEvent(tester, snapshot(state: 'paused'));
+    },
+  );
+
+  testWidgets(
+    "on Auto a torrent's cache comes from the buffer rule, and a film over "
+    'HTTP sends TorrServer nothing',
+    variant: texturePlatform,
+    (tester) async {
+      final torrents = _FakeTorrents();
+      await pumpPlayer(
+        tester,
+        preloadedStreams: const <StreamResult>[
+          StreamResult(
+            url: 'magnet:?xt=urn:btih:film',
+            source: 'Torrent 1080p',
+            providerName: 'T',
+          ),
+        ],
+        overrides: [torrentServiceProvider.overrideWithValue(torrents)],
+      );
+      await sendFirstFrame(tester);
+
+      // 172 MB wanted (180 s at 1080p's 8 Mbit/s), rounded up to a step
+      // within the harness device's 256 MB cap.
+      expect(torrents.cacheMb, 256);
+      final options =
+          (engine.callsTo('setSource').last.arguments as Map)['mediaOptions']
+              as List;
+      expect(
+        options,
+        contains(':prefetch-buffer-size=16384'),
+        reason: "TorrServer holds the film: libVLC's ring is its 16 MiB",
+      );
+      await sendEvent(tester, snapshot(state: 'paused'));
+      await tester.pumpWidget(const SizedBox());
+
+      final none = _FakeTorrents();
+      await pumpPlayer(
+        tester,
+        overrides: [torrentServiceProvider.overrideWithValue(none)],
+      );
+      await sendFirstFrame(tester);
+      expect(none.cacheMb, isNull);
 
       await sendEvent(tester, snapshot(state: 'paused'));
     },
@@ -595,6 +668,13 @@ void main() {
       // back once that file has produced a frame.
       await sendEvent(tester, snapshot(position: 2000));
       await settle(tester);
+      expect(
+        torrents.calls.where((call) => call == 'buffer'),
+        hasLength(1),
+        reason:
+            'a pack file is served by the torrent already loaded: it '
+            'hands TorrServer nothing',
+      );
 
       await openFromBar(tester, l10n.subtitles);
       target = tester
@@ -787,15 +867,10 @@ void main() {
       await openFromBar(tester, l10n.sources);
       expect(selectedRows(tester), <String>['Alpha']);
 
-      // The engine gives up on the source twice. The first error is a
-      // same-source retry - it had produced frames - and the second, with no
-      // frame since, walks the ladder to the next candidate. The panel is a
-      // route above the screen and never re-opened; the tick has to come to
-      // it.
-      await sendEvent(tester, snapshot(state: 'error', position: 1600));
-      await settle(tester);
-      await sendEvent(tester, snapshot(state: 'error', position: 1700));
-      await settle(tester);
+      // The source keeps failing: reopened after each back-off, then given
+      // up on for the next. The panel is a route above the screen and never
+      // re-opened; the tick has to come to it.
+      await failUntil(tester, () => !selectedRows(tester).contains('Alpha'));
 
       expect(find.byType(PlayerPanel), findsOneWidget, reason: 'still up');
       expect(selectedRows(tester), <String>['Beta']);
@@ -915,10 +990,10 @@ void main() {
       await openFromBar(tester, l10n.sources);
 
       // Every candidate dies; the screen fails with the panel still up.
-      for (final position in <int>[1600, 1700, 1800, 1900, 2000, 2100]) {
-        await sendEvent(tester, snapshot(state: 'error', position: position));
-        await settle(tester);
-      }
+      await failUntil(
+        tester,
+        () => find.text(l10n.retry).evaluate().isNotEmpty,
+      );
       expect(find.text(l10n.retry), findsWidgets);
       expect(find.byType(PlayerPanel), findsOneWidget, reason: 'still up');
       expect(focusInPanel(), isTrue, reason: 'Retry waits for the panel');
@@ -980,13 +1055,13 @@ void main() {
       await openFromBar(tester, l10n.sources);
       expect(selectedRows(tester), <String>['Alpha']);
 
-      // Every candidate dies. The first error is a same-source retry (Alpha
-      // had produced frames); after that no attempt ever sees one, so each
-      // error walks the ladder until it runs out and the screen fails.
-      for (final position in <int>[1600, 1700, 1800, 1900, 2000, 2100]) {
-        await sendEvent(tester, snapshot(state: 'error', position: position));
-        await settle(tester);
-      }
+      // Every candidate dies: Alpha, which had played, after its back-off
+      // reopens; the others at once. Then the screen fails.
+      await failUntil(
+        tester,
+        () =>
+            find.widgetWithText(FilledButton, l10n.retry).evaluate().isNotEmpty,
+      );
       expect(
         find.widgetWithText(FilledButton, l10n.retry),
         findsOneWidget,
@@ -1017,6 +1092,49 @@ void main() {
       );
 
       await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    "the start-up view shows the torrent's peers while it prepares",
+    variant: texturePlatform,
+    (tester) async {
+      final torrents = _FakeTorrents()
+        ..holdUrl = Completer<void>()
+        ..status = <dynamic, dynamic>{
+          'active_peers': 12,
+          'total_peers': 80,
+          'download_speed': 1400000,
+          'loaded_size': 24000000,
+        };
+      await pumpPlayer(
+        tester,
+        preloadedStreams: const <StreamResult>[
+          StreamResult(
+            url: 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10',
+            source: 'Torrent 1080p',
+            providerName: 'T',
+          ),
+        ],
+        overrides: [torrentServiceProvider.overrideWithValue(torrents)],
+      );
+      final l10n = await english();
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(seconds: 1));
+      }
+      expect(find.text(l10n.playerPreparingTorrent), findsOneWidget);
+      expect(
+        find.text('12/80 peers · 1.4 MB/s · 24 MB loaded'),
+        findsOneWidget,
+        reason: "the 3 s poll's numbers, before any frame",
+      );
+
+      torrents.holdUrl!.complete();
+      // The open goes on to its setSource before the engine can report.
+      await settle(tester);
+      await sendFirstFrame(tester);
+      expect(find.textContaining(' peers · '), findsNothing);
+      await sendEvent(tester, snapshot(state: 'paused'));
     },
   );
 }
@@ -1078,33 +1196,49 @@ class _FakeExtensions extends ExtensionManager {
 /// private constructor, and standing one up would start a real server.
 class _FakeTorrents implements TorrentService {
   /// What the player asked the server to hold, so a test can check that the
-  /// viewer's buffer setting reaches both engines rather than just libVLC.
+  /// viewer's buffer setting reaches TorrServer.
   int? cacheMb;
   int? readAheadPercent;
 
+  /// The service calls, in order: `buffer` and `url`.
+  final List<String> calls = <String>[];
+
+  /// When set, the stream URL waits for it: "Preparing torrent…" stays up.
+  Completer<void>? holdUrl;
+
+  /// What the status poll answers.
+  Map<dynamic, dynamic> status = <dynamic, dynamic>{
+    'title': 'Pack',
+    'stat_string': 'Seeding',
+    'file_stats': <dynamic>[
+      <dynamic, dynamic>{'id': 0, 'path': 'Pack/S01E01.mkv', 'length': 10},
+      <dynamic, dynamic>{'id': 1, 'path': 'Pack/S01E02.mkv', 'length': 20},
+    ],
+  };
+
   @override
-  Future<void> applyBufferSettings({
+  void bufferForNextStart({
     required int cacheMb,
     required int readAheadPercent,
-  }) async {
+  }) {
+    calls.add('buffer');
     this.cacheMb = cacheMb;
     this.readAheadPercent = readAheadPercent;
   }
 
   @override
-  Future<TorrentStatus?> getCurrentStatus() async =>
-      TorrentStatus.fromMap(<dynamic, dynamic>{
-        'title': 'Pack',
-        'stat_string': 'Seeding',
-        'file_stats': <dynamic>[
-          <dynamic, dynamic>{'id': 0, 'path': 'Pack/S01E01.mkv', 'length': 10},
-          <dynamic, dynamic>{'id': 1, 'path': 'Pack/S01E02.mkv', 'length': 20},
-        ],
-      });
+  TorrentSettings? takeStartSettings() => null;
 
   @override
-  Future<String?> getStreamUrl(String magnetLink) async =>
-      'http://127.0.0.1:9/pack/0';
+  Future<TorrentStatus?> getCurrentStatus() async =>
+      TorrentStatus.fromMap(status);
+
+  @override
+  Future<String?> getStreamUrl(String magnetLink) async {
+    calls.add('url');
+    await holdUrl?.future;
+    return 'http://127.0.0.1:9/pack/0';
+  }
 
   @override
   Future<String?> getStreamUrlForFileIndex(int index) async =>

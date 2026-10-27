@@ -352,6 +352,55 @@ void main() {
         expect(calls[1].arguments, <String, Object?>{'viewId': 42});
       },
     );
+
+    test('keepPicture reaches the engine with the media', () async {
+      final controller = VlcPlayerController();
+      mockEventChannel(63);
+      await harness.attachController(controller, 63);
+
+      await controller.setMedia(
+        VlcMediaSource(uri: Uri.parse('https://example.com/video.mp4')),
+        autoPlay: true,
+        keepPicture: true,
+      );
+      await controller.setMedia(
+        VlcMediaSource(uri: Uri.parse('https://example.com/other.mp4')),
+        autoPlay: true,
+      );
+
+      final sources = calls.where((call) => call.method == 'setSource');
+      expect(
+        (sources.first.arguments as Map<Object?, Object?>)['keepPicture'],
+        isTrue,
+      );
+      expect(
+        (sources.last.arguments as Map<Object?, Object?>).containsKey(
+          'keepPicture',
+        ),
+        isFalse,
+      );
+      controller.dispose();
+    });
+
+    test('a media queued before the player exists keeps no picture: there '
+        'is none yet', () async {
+      final controller = VlcPlayerController();
+      await controller.setMedia(
+        VlcMediaSource(uri: Uri.parse('https://example.com/video.mp4')),
+        keepPicture: true,
+      );
+
+      mockEventChannel(64);
+      await harness.attachController(controller, 64);
+
+      expect(
+        (calls.single.arguments as Map<Object?, Object?>).containsKey(
+          'keepPicture',
+        ),
+        isFalse,
+      );
+      controller.dispose();
+    });
   });
 
   group('playlist', () {
@@ -1137,6 +1186,39 @@ void main() {
   });
 
   group('platform view lifecycle', () {
+    test('a create that answers after its attach was superseded is disposed, '
+        'not attached', () async {
+      final firstCreate = Completer<void>();
+      var creates = 0;
+      harness.install(
+        onCall: (call) async {
+          if (call.method != 'create') return null;
+          // Each answer carries its own view, however late it comes.
+          final viewId = ++creates;
+          if (viewId == 1) await firstCreate.future;
+          return <String, Object?>{'viewId': viewId, 'textureId': viewId};
+        },
+      );
+      mockEventChannel(1);
+      mockEventChannel(2);
+      final controller = VlcPlayerController();
+
+      final first = harness.attachTexturePlayer(controller);
+      await harness.detachController(controller);
+      expect(await harness.attachTexturePlayer(controller), 2);
+      firstCreate.complete();
+      await first;
+
+      expect(controller.isAttached, isTrue);
+      expect(
+        calls
+            .where((call) => call.method == 'dispose')
+            .map((call) => (call.arguments as Map<Object?, Object?>)['viewId']),
+        contains(1),
+      );
+      controller.dispose();
+    });
+
     test('attachTexturePlayer creates a texture backed player', () async {
       final controller = VlcPlayerController(
         mediaSource: VlcMediaSource(
@@ -1494,7 +1576,6 @@ void main() {
 
       expect(controller.play, throwsStateError);
       expect(controller.pause, throwsStateError);
-      expect(controller.stop, throwsStateError);
       expect(controller.getAudioTracks, throwsStateError);
       expect(controller.getSubtitleTracks, throwsStateError);
       expect(controller.disableSubtitle, throwsStateError);
@@ -1502,6 +1583,30 @@ void main() {
       expect(controller.getMediaStats, throwsStateError);
       expect(controller.takeSnapshot, throwsStateError);
 
+      controller.dispose();
+    });
+
+    test('a stop before attach keeps the queued media from starting', () async {
+      // SkyStream's failed screen stops media still waiting for a native
+      // player, so one that comes late plays nothing behind it.
+      final controller = VlcPlayerController(
+        mediaSource: VlcMediaSource(
+          uri: Uri.parse('https://example.com/video.mp4'),
+        ),
+        autoPlay: true,
+      );
+      mockEventChannel(18);
+
+      await controller.stop();
+      await harness.attachController(controller, 18);
+
+      final sources = calls.where((call) => call.method == 'setSource');
+      expect(sources, hasLength(1));
+      expect(
+        (sources.single.arguments as Map<Object?, Object?>)['autoPlay'],
+        isFalse,
+      );
+      expect(calls.where((call) => call.method == 'play'), isEmpty);
       controller.dispose();
     });
 
@@ -1513,6 +1618,7 @@ void main() {
       controller.dispose();
 
       expect(controller.play, throwsStateError);
+      expect(controller.stop, throwsStateError);
       expect(
         () => controller.setMedia(
           VlcMediaSource(uri: Uri.parse('https://example.com/video.mp4')),

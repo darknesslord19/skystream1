@@ -238,4 +238,29 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(notifications, 0);
   });
+
+  testWidgets('a picture held or let go bypasses throttling', (tester) async {
+    // A held picture keeps its size, so a hold starting or ending can be all
+    // a snapshot changes; the screen keeps its controls over the held picture
+    // and lays the new one out by it, so it cannot wait for a flush.
+    final controller = VlcPlayerController(
+      eventThrottleInterval: const Duration(milliseconds: 100),
+    );
+    harness.mockEventChannel(48);
+    await harness.attachController(controller, 48);
+    await harness.sendEvent(48, playbackEvent(position: 0));
+
+    await harness.sendEvent(
+      48,
+      playbackEvent(position: 250)..['pictureHeld'] = true,
+    );
+    expect(controller.value.isPictureHeld, isTrue);
+    expect(controller.value.position, const Duration(milliseconds: 250));
+
+    await harness.sendEvent(48, playbackEvent(position: 500));
+    expect(controller.value.isPictureHeld, isFalse);
+    expect(controller.value.position, const Duration(milliseconds: 500));
+
+    controller.dispose();
+  });
 }

@@ -255,15 +255,13 @@ void main() {
   /// Hardware decoding is the one row whose switch cannot reach a decoder
   /// everywhere, so it is offered only where it decides something.
   ///
-  /// The preference is emitted as an instance-level `--avcodec-hw`. On Windows
-  /// and Linux `libvlc_video_set_callbacks` sets `avcodec-hw = "none"` on the
-  /// media player as it installs the vmem callbacks, and `var_Inherit` stops
-  /// at the first object holding the variable — the media player sits below
-  /// the instance, so the option never arrives and both decode in software
-  /// whichever way the switch is set. On iOS and macOS the decoder is
-  /// VideoToolbox, a standalone module in VLC 3 rather than an avcodec
-  /// accelerator, so `avcodec-hw` has no authority over it and the hardware
-  /// path is there either way.
+  /// The preference reaches libVLC as `:codec=all` on each media, Android's own
+  /// "hardware off". On Windows and Linux `libvlc_video_set_callbacks` sets
+  /// `avcodec-hw = "none"` on the media player as it installs the vmem
+  /// callbacks, so both decode in software whichever way the switch is set.
+  /// On iOS and macOS the decoder is VideoToolbox, a standalone module in VLC 3
+  /// rather than an avcodec accelerator, so the switch reaches nothing there
+  /// and the hardware path is there either way.
   ///
   /// A row that reports "Enabled" over software decode, or "Disabled" over a
   /// hardware one, is worse than no row: it is the app stating something
@@ -326,5 +324,37 @@ void main() {
         );
       });
     }
+  });
+
+  group('the network buffer row', () {
+    // Tall enough that the whole list is built.
+    const Size tall = Size(800, 4000);
+
+    testWidgets('says what Auto does when no size is picked', (
+      WidgetTester tester,
+    ) async {
+      await pumpPlayerSettings(
+        tester,
+        platform: TargetPlatform.android,
+        profile: const DeviceProfile(),
+        size: tall,
+      );
+
+      expect(find.text(l10n.networkBuffer), findsOneWidget);
+      expect(find.text(l10n.networkBufferAutoHint), findsOneWidget);
+    });
+
+    testWidgets('shows a picked size', (WidgetTester tester) async {
+      await pumpPlayerSettings(
+        tester,
+        platform: TargetPlatform.android,
+        profile: const DeviceProfile(),
+        size: tall,
+        settings: const PlayerSettings(bufferOverrideMb: 512),
+      );
+
+      expect(find.text('512 MB'), findsOneWidget);
+      expect(find.text(l10n.networkBufferAutoHint), findsNothing);
+    });
   });
 }

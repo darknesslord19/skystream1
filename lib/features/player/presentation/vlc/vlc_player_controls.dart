@@ -11,6 +11,7 @@ import 'package:vlc_player/vlc_player.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/models/torrent_status.dart';
 import '../../../skip/data/skip_service.dart';
+import '../../domain/live_window.dart';
 import '../../domain/skip_segments.dart';
 import '../../domain/volume_routing.dart';
 import '../player_platform_service.dart';
@@ -56,9 +57,12 @@ import '../../../settings/presentation/player_settings_provider.dart';
 /// single opacity or filter layer spanning both bars - each bar fades on its
 /// own so each layer is bar-sized.
 ///
-/// The spinner keys on `isStalled || isBuffering`, never on the libVLC state
-/// alone: only Android reports `buffering` mid-play, while VLCKit and the
-/// desktop backends stay `playing` through a rebuffer.
+/// The spinner is the controller's stall flag and nothing else (spec 4's one
+/// rule): the clock has stood still for a second while playback is expected,
+/// never while the viewer is choosing a place on the bar or by swiping, and
+/// not in the first second after a seek. libVLC's own states differ by
+/// platform - Android says `buffering` for every rebuffer, the others stay
+/// `playing` - and a percentage would hold a spinner over moving video.
 ///
 /// Buttons whose backend does not exist here, or that the current device
 /// cannot honour, are absent rather than disabled: the screen passes null for
@@ -88,6 +92,10 @@ class VlcPlayerControls extends ConsumerStatefulWidget {
     this.onToggleFullscreen,
     this.isFullscreen = false,
     this.isLive = false,
+    this.liveSegment,
+    this.liveDelay = Duration.zero,
+    this.onLiveSeek,
+    this.onGoLive,
     this.torrentStatus,
     this.skipSegments = const <SkipSegment>[],
     this.onSkipOutro,
@@ -164,6 +172,21 @@ class VlcPlayerControls extends ConsumerStatefulWidget {
 
   /// Whether this is a live stream, decided by the app rather than the engine.
   final bool isLive;
+
+  /// A live stream's target duration, which sets the stretch of its window
+  /// the controls move in; null assumes [kAssumedTargetDuration].
+  final Duration? liveSegment;
+
+  /// How far behind the edge a live stream is opened to play, which the clock
+  /// still counts as live: see [LiveWindow.atLive].
+  final Duration liveDelay;
+
+  /// Seeks a live stream to a fraction of its window: the bar, the steps, the
+  /// keys. Null asks the controller directly.
+  final ValueChanged<double>? onLiveSeek;
+
+  /// Goes back to the live edge, from the badge beside the behind-live clock.
+  final VoidCallback? onGoLive;
 
   /// Non-null only while a torrent is playing and being polled.
   final TorrentStatus? torrentStatus;
@@ -495,6 +518,16 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   /// controller that took it even if the screen swapped controllers mid-drag.
   ChromeVisibilityController? _seekChromeHold;
 
+  /// Whether the viewer is choosing a place: dragging the bar, holding a step
+  /// key the bar gathers into one seek, or swiping across the video. The
+  /// spinner stays down meanwhile - the bar or the toast shows the target.
+  final ValueNotifier<bool> _choosingPlace = ValueNotifier<bool>(false);
+
+  void _updateChoosingPlace() {
+    _choosingPlace.value =
+        _seekChromeHold != null || _horizontalDragTarget != null;
+  }
+
   /// Speed to restore when a long-press boost ends. Null when not boosting.
   double? _speedBeforeBoost;
 
@@ -662,6 +695,7 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     _burst.dispose();
     _rail.dispose();
     _clockPosition.dispose();
+    _choosingPlace.dispose();
     super.dispose();
   }
 
@@ -1114,8 +1148,13 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
       return;
     }
     _horizontalDragStartX = d.globalPosition.dx;
-    _horizontalDragStartPosition = widget.controller.value.position;
+    final value = widget.controller.value;
+    // Over a held picture, from where the reopen is going (see [_seekBy]).
+    _horizontalDragStartPosition = value.isPictureHeld
+        ? widget.controller.pendingSeekTarget.value ?? value.position
+        : value.position;
     _horizontalDragTarget = _horizontalDragStartPosition;
+    _updateChoosingPlace();
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails d, PlayerSettings settings) {
@@ -1146,6 +1185,7 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     _horizontalDragStartX = null;
     _horizontalDragStartPosition = null;
     _horizontalDragTarget = null;
+    _updateChoosingPlace();
     if (target != null) {
       widget.controller.seekTo(target);
       _rebaseSeekChain(target);
@@ -1503,9 +1543,16 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   /// for a key and a wheel just as well as for a tap.
   void _seekBy(Duration delta) {
     final value = widget.controller.value;
-    if (widget.isLive || !value.isSeekable) return;
-    final origin = _seekBase == null ? value.position : _seekOrigin!;
-    var target = (_seekBase ?? value.position) + delta;
+    if (widget.isLive) return _stepInLiveWindow(delta, value);
+    if (!value.isSeekable) return;
+    // Over a held picture the engine reports the new media's 0 until it
+    // plays: a step counts from where the reopen is going. Elsewhere the
+    // engine's own word is the truth, as it always was.
+    final here = value.isPictureHeld
+        ? widget.controller.pendingSeekTarget.value ?? value.position
+        : value.position;
+    final origin = _seekBase == null ? here : _seekOrigin!;
+    var target = (_seekBase ?? here) + delta;
     if (target < Duration.zero) target = Duration.zero;
     final duration = value.duration;
     if (duration > Duration.zero && target > duration) target = duration;
@@ -1515,6 +1562,38 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     widget.controller.seekTo(target);
     _showSeekBurst(delta, target - origin);
   }
+
+  /// A live stream steps inside the window its server still lists (spec
+  /// section 8), from where a step on its way will land, so a run of presses
+  /// adds up. A feed with no window, a step back at the start of the stretch
+  /// and one forward at its end do nothing.
+  void _stepInLiveWindow(Duration delta, VlcPlayerValue value) {
+    final window = _liveWindowOf(value);
+    if (window == null) return;
+    final pending = widget.controller.pendingSeekTarget.value;
+    final from = pending == null
+        ? window.fraction
+        : window.fractionAt(pending, position: value.position);
+    final next = window.step(delta, from: from);
+    if (next == null) return;
+    final seek = widget.onLiveSeek;
+    if (seek != null) {
+      seek(next);
+    } else {
+      unawaited(widget.controller.seekToWindowFraction(next));
+    }
+    _showSeekBurst(delta, delta);
+  }
+
+  /// The window a live stream can be moved in, or null: not live, or a feed
+  /// with none.
+  LiveWindow? _liveWindowOf(VlcPlayerValue value) => widget.isLive
+      ? LiveWindow.of(
+          value,
+          targetDuration: widget.liveSegment,
+          liveDelay: widget.liveDelay,
+        )
+      : null;
 
   /// The side is [delta]'s - which half the viewer actually tapped - and the
   /// number is the chain's cumulative [offset] measured in that same
@@ -1564,19 +1643,28 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   void _beginSeekHold() {
     if (_seekChromeHold != null) {
       _chrome.poke();
+      _updateChoosingPlace();
       return;
     }
     _seekChromeHold = _chrome;
     _chrome.poke(hold: true);
+    _updateChoosingPlace();
   }
 
   /// The bar committed [target], or gave it up (null) because the media
   /// changed under the drag. Either way the hold goes back exactly once.
   void _endSeekHold(Duration? target) {
+    // A bar disposed with these controls ends its seek a frame later: there
+    // is nothing left to hold.
+    if (!mounted) return;
     if (target != null) _rebaseSeekChain(target);
     final held = _seekChromeHold;
-    if (held == null) return;
+    if (held == null) {
+      _updateChoosingPlace();
+      return;
+    }
     _seekChromeHold = null;
+    _updateChoosingPlace();
     held.release();
   }
 
@@ -1721,19 +1809,36 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   Widget _clock({bool first = false}) => Padding(
     padding: EdgeInsets.only(left: first ? 0 : 8, right: 4),
     child: RepaintBoundary(
-      child: PlayerValueSelector<(Duration, bool)>(
+      child: PlayerValueSelector<(Duration, bool, Duration?)>(
         controller: widget.controller,
-        selector: (v) => (v.duration, widget.isLive || v.isLive),
+        // The segment only when there is a window: the bar then publishes
+        // the place in it, and the clock says how far that is from live.
+        selector: (v) =>
+            (v.duration, widget.isLive || v.isLive, _liveWindowOf(v)?.segment),
         builder: (context, state) {
-          final (duration, live) = state;
+          final (duration, live, segment) = state;
           return ValueListenableBuilder<Duration>(
             valueListenable: _clockPosition,
-            builder: (context, position, _) => PlayerTimeLabel(
-              position: position,
-              duration: duration,
-              hasDuration: duration > Duration.zero,
-              isLive: live,
-            ),
+            builder: (context, position, _) {
+              final behind = duration - position;
+              final atLive =
+                  segment == null ||
+                  LiveWindow.countsAsLive(
+                    behind,
+                    segment: segment,
+                    liveDelay: widget.liveDelay,
+                  );
+              return PlayerTimeLabel(
+                position: position,
+                duration: duration,
+                hasDuration: duration > Duration.zero,
+                isLive: live,
+                behindLive: atLive ? null : behind,
+                // Only with a window to go back along: a feed with none is
+                // always at its edge.
+                onGoLive: segment == null ? null : widget.onGoLive,
+              );
+            },
           );
         },
       ),
@@ -1999,21 +2104,32 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
                 _horizontalDragStartX = null;
                 _horizontalDragStartPosition = null;
                 _horizontalDragTarget = null;
+                _updateChoosingPlace();
               },
               onLongPressStart: (_) => _startSpeedBoost(),
               onLongPressEnd: (_) => _endSpeedBoost(),
               onLongPressCancel: _endSpeedBoost,
             ),
-          // Reads through even when the chrome is hidden. Off Android, libVLC
-          // keeps saying `playing` through a rebuffer; the controller's
-          // position clock is what knows the frame has frozen.
+          // Reads through even when the chrome is hidden. The stall flag is
+          // the controller's position clock, the same on every platform.
           RepaintBoundary(
-            child: PlayerValueSelector<bool>(
-              controller: widget.controller,
-              selector: (v) => v.isStalled || v.isBuffering,
-              builder: (context, buffering) => buffering
-                  ? const PlayerBufferingIndicator()
-                  : const SizedBox.shrink(),
+            child: ValueListenableBuilder<bool>(
+              valueListenable: _choosingPlace,
+              builder: (context, choosing, _) => choosing
+                  ? const SizedBox.shrink()
+                  : PlayerValueSelector<bool>(
+                      controller: widget.controller,
+                      // A held picture is a reopen on its way: spinner, as
+                      // over any picture that stands still - unless the
+                      // viewer paused it.
+                      selector: (v) =>
+                          v.isStalled ||
+                          (v.isPictureHeld &&
+                              v.state != VlcPlaybackState.paused),
+                      builder: (context, stalled) => stalled
+                          ? const PlayerBufferingIndicator()
+                          : const SizedBox.shrink(),
+                    ),
             ),
           ),
           // The touch build's primary control, above the screen-wide detector
@@ -2040,21 +2156,26 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
                 IgnorePointer(
                   ignoring: !visible,
                   child: RepaintBoundary(
-                    child: PlayerValueSelector<(bool, bool)>(
+                    child: PlayerValueSelector<(bool, bool, bool)>(
                       controller: widget.controller,
                       // A rebuffer is still playback, exactly as _leading
-                      // reads it, so the glyph keeps offering pause; and while
-                      // the spinner is up the glyph collapses, so the two
-                      // never draw a disc around each other.
+                      // reads it, so the glyph keeps offering pause. It folds
+                      // away while the spinner is up - the spinner being the
+                      // stall flag - so the two never draw a disc around each
+                      // other.
                       selector: (v) => (
                         v.isPlaying || v.isBuffering,
-                        v.isStalled || v.isBuffering,
+                        v.isStalled ||
+                            (v.isPictureHeld &&
+                                v.state != VlcPlaybackState.paused),
+                        _liveWindowOf(v) != null,
                       ),
                       builder: (context, state) {
-                        final (playing, busy) = state;
+                        final (playing, busy, liveWindow) = state;
                         if (busy) return const SizedBox.shrink();
                         final int step = _seekStepSeconds(settings);
-                        final bool steps = !widget.isLive;
+                        // A live stream steps only inside a window.
+                        final bool steps = !widget.isLive || liveWindow;
                         return PlayerCenterControls(
                           playing: playing,
                           playLabel: playing ? l10n.pause : l10n.play,
@@ -2307,6 +2428,8 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
                             bufferedFraction: widget.bufferedFraction,
                             isTv: isTv,
                             isLive: widget.isLive,
+                            liveSegment: widget.liveSegment,
+                            onLiveSeek: widget.onLiveSeek,
                             skipSegments: widget.skipSegments,
                             // The clock is in the transport row on every form
                             // factor now, drawn off the position this bar

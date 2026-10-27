@@ -39,6 +39,7 @@ import 'core/widgets/update_dialog.dart';
 import 'core/widgets/app_error_boundary.dart';
 import 'core/services/download_service.dart';
 import 'core/services/notification_service.dart';
+import 'features/player/domain/qoe_log.dart';
 
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:skystream/l10n/generated/app_localizations.dart';
@@ -161,6 +162,9 @@ class _AppRootState extends State<AppRoot> {
             if (kDebugMode) debugPrint("Error setting high refresh rate: $e");
           }),
       ]);
+
+      // The developer option's QoE switch, kept across launches.
+      QoeLog.writeToAppLog = _storageService.getDevQoeLog();
 
       if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
         final alwaysOnTop = _storageService.isAlwaysOnTop();

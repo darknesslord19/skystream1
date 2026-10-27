@@ -27,6 +27,9 @@
 #include <vector>
 
 #include "vlc_player_core.h"
+#include "vlc_plugin_cache.h"
+#include "vlc_snapshot_order.h"
+#include "vlc_update_pump.h"
 
 namespace vlc_player {
 namespace {
@@ -52,6 +55,21 @@ std::wstring ExecutableDirectory() {
 
   const size_t separator = path.find_last_of(L"\\/");
   return separator == std::wstring::npos ? L"" : path.substr(0, separator);
+}
+
+// When this executable was written: the plugin cache must be newer.
+FILETIME ExecutableWritten() {
+  FILETIME written{0, 0};
+  std::wstring path(MAX_PATH, L'\0');
+  const DWORD length =
+      GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (length > 0 &&
+      GetFileAttributesExW(path.substr(0, length).c_str(),
+                           GetFileExInfoStandard, &data)) {
+    written = data.ftLastWriteTime;
+  }
+  return written;
 }
 
 bool FileExists(const std::wstring &path) {
@@ -84,7 +102,10 @@ bool ConfigureVlcRuntime(std::string *error) {
     return false;
   }
 
-  SetEnvironmentVariableW(L"VLC_PLUGIN_PATH", plugins_directory.c_str());
+  // No VLC_PLUGIN_PATH: libVLC already scans the plugins folder beside
+  // libvlccore.dll (3.0.24 bank.c, AllocateAllPlugins, config_GetLibDir), and
+  // pointing the variable at the same folder made it scan, and register,
+  // every plugin a second time.
   return true;
 }
 
@@ -318,23 +339,32 @@ class WindowsVlcPlayer
     if (!init_error_.empty() || disposed_.load()) {
       return;
     }
-    core_ = std::make_unique<VlcPlayerCore>(options, [this] {
-      if (!disposed_.load() && texture_id_ != -1) {
-        texture_registrar_->MarkTextureFrameAvailable(texture_id_);
-      }
+    // The first player in the process makes the instance that keeps the
+    // plugin bank loaded, rebuilding libVLC's plugin cache if it is missing
+    // or stale (spec 1.7, FORK.md section 22). The decision walks the plugins
+    // folder, so it is made once too. This runs on a create thread, never
+    // the platform thread.
+    static std::once_flag kept_bank;
+    std::call_once(kept_bank, [] {
+      VlcPlayerCore::KeepPluginBankLoaded(PluginCacheNeedsRebuild(
+          ExecutableDirectory() + L"\\plugins", ExecutableWritten()));
     });
+    updates_ = std::make_unique<VlcUpdatePump>(
+        [this] { SendSnapshot(true); }, std::chrono::milliseconds(100),
+        std::chrono::milliseconds(1000));
+    core_ = std::make_unique<VlcPlayerCore>(
+        options,
+        [this] {
+          if (!disposed_.load() && texture_id_ != -1) {
+            texture_registrar_->MarkTextureFrameAvailable(texture_id_);
+          }
+        },
+        [this] { updates_->Wake(); });
     if (!core_->is_valid()) {
       init_error_ = core_->error();
       return;
     }
-
-    polling_ = true;
-    polling_thread_ = std::thread([this] {
-      while (polling_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        SendSnapshot(true);
-      }
-    });
+    updates_->Start();
   }
 
   ~WindowsVlcPlayer() {
@@ -352,9 +382,10 @@ class WindowsVlcPlayer
                         const std::vector<std::string> &headers,
                         const std::vector<std::string> &media_options,
                         int64_t start_position,
-                        bool auto_play) {
-    const std::string error =
-        core_->SetSource(uri, headers, media_options, start_position, false);
+                        bool auto_play,
+                        bool keep_picture) {
+    const std::string error = core_->SetSource(
+        uri, headers, media_options, start_position, false, keep_picture);
     SendSnapshot();
     if (!error.empty() || !auto_play) {
       return error;
@@ -377,6 +408,12 @@ class WindowsVlcPlayer
   std::string SeekTo(int64_t milliseconds) {
     return RunAndSendSnapshot([this, milliseconds] {
       return core_->SeekTo(milliseconds);
+    });
+  }
+
+  std::string SeekToFraction(double fraction) {
+    return RunAndSendSnapshot([this, fraction] {
+      return core_->SeekToFraction(fraction);
     });
   }
 
@@ -489,11 +526,14 @@ class WindowsVlcPlayer
       return;
     }
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);
-    polling_ = false;
-    if (polling_thread_.joinable()) {
-      polling_thread_.join();
+    // No update reads the core while it goes. Returns at once: the pump
+    // waits on a condition, not a sleep.
+    if (updates_ != nullptr) {
+      updates_->Stop();
     }
 
+    // No longer blocks: the core detaches the video output and the events and
+    // hands the media player to a thread of its own (FORK.md 21).
     if (core_ != nullptr) {
       core_->Dispose();
     }
@@ -590,17 +630,22 @@ class WindowsVlcPlayer
     if (!event_sink_) {
       return;
     }
-    if (!force && has_last_sent_snapshot_ &&
-        snapshot == last_sent_snapshot_) {
+    // Sent under this lock in the order they were made: one the pump began
+    // before a command is not sent after the command's own (FORK.md 37).
+    if (!order_.Admit(snapshot, force)) {
       return;
     }
-    last_sent_snapshot_ = snapshot;
-    has_last_sent_snapshot_ = true;
 
     EncodableMap event;
+    // Delivered from the pump's thread later than one sent at once from the
+    // platform thread: Dart applies none older than the last (FORK.md 37).
+    event[EncodableValue("sequence")] =
+        EncodableValue(static_cast<int64_t>(snapshot.sequence));
     event[EncodableValue("state")] = EncodableValue(snapshot.state);
     event[EncodableValue("position")] = EncodableValue(snapshot.position);
     event[EncodableValue("duration")] = EncodableValue(snapshot.duration);
+    event[EncodableValue("positionFraction")] =
+        EncodableValue(snapshot.position_fraction);
     event[EncodableValue("volume")] = EncodableValue(snapshot.volume);
     event[EncodableValue("playbackSpeed")] =
         EncodableValue(snapshot.playback_speed);
@@ -616,6 +661,13 @@ class WindowsVlcPlayer
     event[EncodableValue("isReady")] = EncodableValue(snapshot.is_ready);
     event[EncodableValue("isSeekable")] = EncodableValue(snapshot.is_seekable);
     event[EncodableValue("isLive")] = EncodableValue(snapshot.is_live);
+    event[EncodableValue("pictureHeld")] = EncodableValue(snapshot.picture_held);
+    if (snapshot.seek_refusals > 0) {
+      event[EncodableValue("seekRefusals")] =
+          EncodableValue(snapshot.seek_refusals);
+      event[EncodableValue("seekRefusedAt")] =
+          EncodableValue(snapshot.seek_refused_at);
+    }
     if (snapshot.video_width > 0 && snapshot.video_height > 0) {
       EncodableMap video_size;
       video_size[EncodableValue("width")] =
@@ -652,8 +704,7 @@ class WindowsVlcPlayer
   flutter::EventChannel<EncodableValue> event_channel_;
   std::unique_ptr<flutter::EventSink<EncodableValue>> event_sink_;
   std::mutex event_mutex_;
-  bool has_last_sent_snapshot_ = false;
-  VlcSnapshot last_sent_snapshot_;
+  VlcSnapshotOrder order_;  // guarded by event_mutex_
 
   std::unique_ptr<VlcPlayerCore> core_;
   std::string init_error_;
@@ -665,8 +716,7 @@ class WindowsVlcPlayer
   // libVLC's stop, and a raster thread waiting on it would stall the whole
   // window for as long as VLC takes to shut down.
   std::mutex frame_mutex_;
-  std::atomic<bool> polling_{false};
-  std::thread polling_thread_;
+  std::unique_ptr<VlcUpdatePump> updates_;
 
   std::unique_ptr<flutter::TextureVariant> texture_;
   int64_t texture_id_ = -1;
@@ -833,7 +883,8 @@ void VlcPlayerPlugin::HandleMethodCall(
                               ReadHeaders(*arguments),
                               ReadStringList(*arguments, "mediaOptions"),
                               start_position,
-                              ReadBool(*arguments, "autoPlay"));
+                              ReadBool(*arguments, "autoPlay"),
+                              ReadBool(*arguments, "keepPicture"));
     if (error == "A non-empty uri is required.") {
       result->Error("invalid_args", error);
       return;
@@ -851,6 +902,14 @@ void VlcPlayerPlugin::HandleMethodCall(
       return;
     }
     error = player->SeekTo(position);
+  } else if (method_call.method_name() == "seekToFraction") {
+    double fraction = 0;
+    if (!ReadDouble(*arguments, "fraction", &fraction) ||
+        !std::isfinite(fraction) || fraction < 0 || fraction > 1) {
+      result->Error("invalid_args", "A fraction within 0..1 is required.");
+      return;
+    }
+    error = player->SeekToFraction(fraction);
   } else if (method_call.method_name() == "setVolume") {
     int64_t volume = 0;
     if (!ReadInt64(*arguments, "volume", &volume)) {

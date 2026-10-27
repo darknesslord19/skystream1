@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 2.8.1
+version: 2.9.0
 
 environment:
   sdk: ^3.13.0
@@ -88,6 +88,10 @@ dependencies:
   flutter_cache_manager: ^3.4.1
   path: ^1.9.1
   http: ^1.6.0
+  # Wall-clock time that tests can move: the check's Retry-After dates and the
+  # recovery policy's schedule read it, and the fake VLC engine builds its
+  # controllers under the test's fake clock through the same zone.
+  clock: ^1.1.2
   connectivity_plus: ^7.1.1
   html_unescape: ^2.0.0
   html: ^0.15.6
@@ -119,10 +123,6 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  # The fake VLC engine builds its controllers under the test's fake clock,
-  # which reaches vlc_player's playback clock through package:clock's zone.
-  clock: ^1.1.2
 
   # Runs integration_test/ against a real engine on a real device or desktop
   # runner. `flutter test` alone cannot catch a native failure: it runs on

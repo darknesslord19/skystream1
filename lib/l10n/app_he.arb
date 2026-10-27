@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "האיכות אינה מובטחת. המקורות ממוינים לפי העדפה זו, וזרם שמציע כמה איכויות מתנגן בה או באיכות הקרובה ביותר מתחתיה. ההפעלה תלויה במה שהספק מציע בפועל.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "שחקנים: {names}",
   "actorRoleMain": "ראשי",
   "actorRoleSupporting": "משנה",
-  "actorRoleBackground": "ניצב"
+  "actorRoleBackground": "ניצב",
+  "playerQuality": "איכות",
+  "playerQualityAuto": "אוטומטי",
+  "playerQualityAutoPlaying": "אוטומטי · {height}",
+  "networkBufferAuto": "אוטומטי (מומלץ)",
+  "networkBufferAutoHint": "הגודל נקבע לכל סרטון לפי קצב הסיביות שלו והזיכרון של מכשיר זה.",
+  "devQoeLog": "יומן QoE",
+  "devQoeLogSubtitle": "כותב את זמני הניגון ביומן האפליקציה",
+  "playerGoLive": "מעבר לשידור החי",
+  "playerBehindLive": "{time} מאחורי השידור החי"
 }

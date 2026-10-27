@@ -1212,8 +1212,7 @@ void main() {
       await pumpView(tester);
       expect(find.text('First'), findsNothing);
 
-      // The player makes these itself: re-seating after a track switch, and
-      // nudging a stalled stream.
+      // The player makes these itself, nudging a stalled stream for one.
       await controller.seekTo(const Duration(milliseconds: 7600));
       await engine.emit(<String, Object?>{
         'state': 'playing',

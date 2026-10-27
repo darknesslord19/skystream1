@@ -1384,7 +1384,7 @@ class AppLocalizationsAs extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'গুণমানৰ নিশ্চয়তা নাই। উৎসসমূহ এই পছন্দ অনুসৰি সজোৱা হয়, আৰু যিটো ষ্ট্ৰীমত কেইবাটাও গুণমান থাকে সেয়া এই গুণমানত বা ইয়াৰ তলৰ আটাইতকৈ ওচৰৰ গুণমানত চলে। প্লেবেক প্ৰদানকাৰীয়ে প্ৰকৃততে কি আগবঢ়ায় তাৰ ওপৰত নিৰ্ভৰ কৰে।';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1512,6 +1512,16 @@ class AppLocalizationsAs extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1556,6 +1566,9 @@ class AppLocalizationsAs extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2388,4 +2401,36 @@ class AppLocalizationsAs extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'পটভূমি';
+
+  @override
+  String get playerQuality => 'গুণমান';
+
+  @override
+  String get playerQualityAuto => 'স্বয়ংক্ৰিয়';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'স্বয়ংক্ৰিয় · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'স্বয়ংক্ৰিয় (পৰামৰ্শিত)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'প্ৰতিটো ভিডিঅ\'ৰ বিটৰেট আৰু এই ডিভাইচৰ মেমৰি অনুসৰি আকাৰ ঠিক কৰা হয়।';
+
+  @override
+  String get devQoeLog => 'QoE লগ';
+
+  @override
+  String get devQoeLogSubtitle => 'এপৰ লগত প্লেবেকৰ সময়বোৰ লিখে';
+
+  @override
+  String get playerGoLive => 'লাইভলৈ যাওক';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'লাইভতকৈ $time পিছত';
+  }
 }

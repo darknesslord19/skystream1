@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skystream/core/network/dio_client_provider.dart';
+import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
 
 import 'fake_vlc_engine.dart';
 import 'vlc_screen_harness.dart';
@@ -66,6 +67,11 @@ void main() {
       expect(web.asked, <String>[_master, _variant]);
 
       // libVLC keeps saying what it says; the screen keeps the measurement.
+      // Paused by the viewer: a pause nobody asked for is a failure.
+      await tester
+          .widget<VlcPlayerControls>(find.byType(VlcPlayerControls))
+          .controller
+          .pause();
       await sendEvent(
         tester,
         snapshot(state: 'paused', position: 2500, duration: _inflatedMs),

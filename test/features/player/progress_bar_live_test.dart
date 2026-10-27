@@ -53,6 +53,7 @@ void main() {
     bool isLive = false,
     bool showRemaining = false,
     Locale? locale,
+    Duration? liveSegment,
   }) {
     clockPosition = ValueNotifier<Duration>(controller.value.position);
     return tester.pumpWidget(
@@ -78,6 +79,7 @@ void main() {
                       controller: controller,
                       isLive: isLive,
                       displayPosition: clockPosition,
+                      liveSegment: liveSegment,
                     ),
                     // The transport row's clock, built the way
                     // `VlcPlayerControls._clock` builds it.
@@ -231,5 +233,60 @@ void main() {
     expect(find.text(en.live), findsNothing);
 
     await tearDownInBody(tester);
+  });
+
+  group('a live window', () {
+    /// Live HLS 4,000 s into its own timeline, [fraction] of the way through
+    /// a two-minute window.
+    Map<String, Object?> window({double fraction = 0.9}) => <String, Object?>{
+      'position': 4000000,
+      'duration': 120000,
+      'isSeekable': true,
+      'isLive': false,
+      'positionFraction': fraction,
+    };
+
+    testWidgets('gives the bar its stretch, and a tap seeks by fraction, kept '
+        'inside it', (tester) async {
+      await pumpBar(
+        tester,
+        isLive: true,
+        liveSegment: const Duration(seconds: 4),
+      );
+      await emit(tester, window());
+      expect(thumb, findsOneWidget);
+      expect(barFocus(tester).canRequestFocus, isTrue);
+
+      // A twentieth of the way along, inside the two oldest segments (the
+      // first 8 s of 120), which are libVLC's: the seek lands two segments in.
+      final bar = tester.getRect(seekBar);
+      await tester.tapAt(Offset(bar.left + bar.width / 20, bar.center.dy));
+      await tester.pump();
+
+      final call = engine.callsTo('seekToFraction').single;
+      expect(
+        (call.arguments as Map<Object?, Object?>)['fraction'],
+        closeTo(8 / 120, 1e-3),
+      );
+
+      await tearDownInBody(tester);
+    });
+
+    // Review Focus 4: a feed with no window keeps today's controls, and a
+    // window that arrives late brings the bar with it.
+    testWidgets('none keeps the LIVE badge and no bar, until one arrives', (
+      tester,
+    ) async {
+      final l10n = await l10nFor('en');
+      await pumpBar(tester, isLive: true);
+      await emit(tester, {'isSeekable': false, 'duration': 0, 'isLive': true});
+      expect(find.text(l10n.live), findsOneWidget);
+      expect(thumb, findsNothing);
+
+      await emit(tester, window());
+      expect(thumb, findsOneWidget);
+
+      await tearDownInBody(tester);
+    });
   });
 }

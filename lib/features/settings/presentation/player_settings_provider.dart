@@ -156,26 +156,17 @@ class PlayerSettings {
   /// Default: [QualityFilterMode.any] (sort only, no filtering).
   final QualityFilterMode qualityFilterMode;
 
-  /// How much of a network stream to hold in memory, in megabytes.
+  /// The read-ahead size the viewer picked, in megabytes, or null for Auto.
   ///
-  /// Read-ahead, not latency. It feeds libVLC's prefetch buffer, which sits
-  /// under the demuxer and holds a window either side of the read point, so a
-  /// seek inside that window costs nothing and a stuttering connection has
-  /// something to draw on. Deliberately not wired to `--network-caching`: that
-  /// is output latency, and a large value there is what made a newly selected
-  /// audio track silent for a full minute.
+  /// Auto sizes each open's read-ahead from the video's bitrate, the network
+  /// and this device's memory (`bufferPlanFor`, spec 1.2). A size picked here
+  /// replaces that for every kind of media: a file, a torrent, and HLS, which
+  /// gets it as seconds at its bitrate.
   ///
-  /// Megabytes rather than minutes because libVLC sizes this in bytes and
-  /// never in time. Converting from minutes needed a guess at the bitrate and
-  /// a cap for the memory, and the two together made most of the choices
-  /// identical - four different durations all landing on the same buffer.
-  /// The number chosen here is the number reserved.
-  ///
-  /// Null means nobody has chosen, and the device picks - see
-  /// `defaultNetworkBufferMb`. Stored as null rather than as a resolved figure
-  /// so the answer follows the hardware if the same account is restored onto a
-  /// different device.
-  final int? networkBufferMb;
+  /// Stored under `player_buffer_override_mb`. The key before it,
+  /// `player_network_buffer_mb`, held a size every install had been nudged
+  /// into, so it is never read: everyone starts on Auto.
+  final int? bufferOverrideMb;
 
   /// Maximum volume the player allows, as a percentage (100–200).
   /// mpv can amplify beyond the source level; 100 disables the boost.
@@ -242,7 +233,7 @@ class PlayerSettings {
     this.wifiQuality = kDefaultWifiQuality,
     this.mobileQuality = QualityPreference.q1080,
     this.qualityFilterMode = QualityFilterMode.any,
-    this.networkBufferMb,
+    this.bufferOverrideMb,
     this.maxVolumePercent = 200,
     this.showRemainingTime = false,
     this.showVolume = true,
@@ -285,7 +276,8 @@ class PlayerSettings {
     QualityPreference? wifiQuality,
     QualityPreference? mobileQuality,
     QualityFilterMode? qualityFilterMode,
-    int? networkBufferMb,
+    int? bufferOverrideMb,
+    bool clearBufferOverride = false,
     int? maxVolumePercent,
     bool? showRemainingTime,
     bool? showVolume,
@@ -331,7 +323,9 @@ class PlayerSettings {
       wifiQuality: wifiQuality ?? this.wifiQuality,
       mobileQuality: mobileQuality ?? this.mobileQuality,
       qualityFilterMode: qualityFilterMode ?? this.qualityFilterMode,
-      networkBufferMb: networkBufferMb ?? this.networkBufferMb,
+      bufferOverrideMb: clearBufferOverride
+          ? null
+          : (bufferOverrideMb ?? this.bufferOverrideMb),
       maxVolumePercent: maxVolumePercent ?? this.maxVolumePercent,
       showRemainingTime: showRemainingTime ?? this.showRemainingTime,
       showVolume: showVolume ?? this.showVolume,
@@ -538,9 +532,9 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
         true;
 
     // No defaultValue: an absent key has to stay absent, because null is what
-    // "let the device decide" is stored as.
-    final networkBufferMb = storage.getPlayerSetting<int>(
-      'player_network_buffer_mb',
+    // Auto is stored as. The old key, player_network_buffer_mb, is never read.
+    final bufferOverrideMb = storage.getPlayerSetting<int>(
+      'player_buffer_override_mb',
     );
     final maxVolumePercent =
         storage.getPlayerSetting<int>('player_max_volume', defaultValue: 200) ??
@@ -572,7 +566,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       wifiQuality: wifiQ,
       mobileQuality: mobileQ,
       qualityFilterMode: filterMode,
-      networkBufferMb: networkBufferMb,
+      bufferOverrideMb: bufferOverrideMb,
       maxVolumePercent: maxVolumePercent,
       showRemainingTime: showRemaining,
       showVolume: showVolume,
@@ -695,16 +689,22 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
     _update((PlayerSettings c) => c.copyWith(hardwareDecoding: val));
   }
 
-  Future<void> setNetworkBufferMb(int megabytes) async {
+  /// Picks a read-ahead size, or Auto with null.
+  Future<void> setBufferOverrideMb(int? megabytes) async {
+    if (megabytes == null) {
+      await _repository.setPlayerSetting('player_buffer_override_mb', null);
+      _update((PlayerSettings c) => c.copyWith(clearBufferOverride: true));
+      return;
+    }
     // The ends of [kNetworkBufferChoicesMb]. Clamped rather than validated so
-    // a stored value from an older build - or a newer one - lands inside the
-    // range this build actually offers.
+    // a value from an older build - or a newer one - lands inside the range
+    // this build actually offers.
     final clamped = megabytes.clamp(
       kNetworkBufferChoicesMb.first,
       kNetworkBufferChoicesMb.last,
     );
-    await _repository.setPlayerSetting('player_network_buffer_mb', clamped);
-    _update((PlayerSettings c) => c.copyWith(networkBufferMb: clamped));
+    await _repository.setPlayerSetting('player_buffer_override_mb', clamped);
+    _update((PlayerSettings c) => c.copyWith(bufferOverrideMb: clamped));
   }
 
   Future<void> setMaxVolumePercent(int percent) async {

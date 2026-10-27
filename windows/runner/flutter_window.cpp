@@ -4,6 +4,12 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+#include <windows.h>
+
+#include <cstdint>
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -25,6 +31,37 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  // What the player sizes its read-ahead from (lib/core/providers/device_memory.dart).
+  // The engine's messenger keeps the handler after this channel object goes.
+  flutter::MethodChannel<> memory_channel(
+      flutter_controller_->engine()->messenger(),
+      "dev.akash.skystream/device_memory",
+      &flutter::StandardMethodCodec::GetInstance());
+  memory_channel.SetMethodCallHandler(
+      [](const flutter::MethodCall<>& call,
+         std::unique_ptr<flutter::MethodResult<>> result) {
+        if (call.method_name() != "read") {
+          result->NotImplemented();
+          return;
+        }
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        if (!GlobalMemoryStatusEx(&status)) {
+          result->Error("unavailable", "GlobalMemoryStatusEx failed");
+          return;
+        }
+        const uint64_t mb = 1024 * 1024;
+        flutter::EncodableMap reading{
+            {flutter::EncodableValue("totalMb"),
+             flutter::EncodableValue(
+                 static_cast<int64_t>(status.ullTotalPhys / mb))},
+            {flutter::EncodableValue("freeMb"),
+             flutter::EncodableValue(
+                 static_cast<int64_t>(status.ullAvailPhys / mb))},
+            {flutter::EncodableValue("lowRam"), flutter::EncodableValue(false)},
+        };
+        result->Success(flutter::EncodableValue(reading));
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {

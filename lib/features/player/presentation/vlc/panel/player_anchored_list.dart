@@ -15,7 +15,10 @@ import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 ///
 /// The anchor is decided once, at open. A later [anchorIndex] never scrolls or
 /// refocuses, but a shrinking [itemCount] that unmounts the focused row is
-/// caught and focus is put back inside the list.
+/// caught and focus is put back inside the list. With
+/// [findChildIndexCallback], rows that carry keys keep their elements, and the
+/// focus on them, when rows above them come or go, and the anchor follows the
+/// row it opened on rather than its position.
 class PanelAnchoredList extends StatefulWidget {
   const PanelAnchoredList({
     required this.itemCount,
@@ -24,6 +27,7 @@ class PanelAnchoredList extends StatefulWidget {
     required this.estimatedRowExtent,
     this.autofocus = false,
     this.padding = const EdgeInsets.only(bottom: 12),
+    this.findChildIndexCallback,
     super.key,
   });
 
@@ -44,6 +48,10 @@ class PanelAnchoredList extends StatefulWidget {
 
   final EdgeInsetsGeometry padding;
 
+  /// Where the row with this key is now, for a list whose rows carry keys:
+  /// see [ListView.builder]'s own.
+  final ChildIndexGetter? findChildIndexCallback;
+
   @override
   State<PanelAnchoredList> createState() => _PanelAnchoredListState();
 }
@@ -62,6 +70,12 @@ class _PanelAnchoredListState extends State<PanelAnchoredList> {
 
   /// Marks the anchor row so its laid-out rect can be read after frame one.
   final GlobalKey _anchorKey = GlobalKey();
+
+  /// The key of the row the list opened on, once it has been built, for a
+  /// list whose rows carry keys: that row stays the anchor wherever rows
+  /// above it move it, so its element, and its focus, go with it.
+  Key? _anchorRow;
+  bool _anchorRowKnown = false;
 
   @override
   void initState() {
@@ -200,9 +214,36 @@ class _PanelAnchoredListState extends State<PanelAnchoredList> {
       itemCount: widget.itemCount,
       itemBuilder: (context, index) {
         final row = widget.itemBuilder(context, index);
-        if (index != _anchor) return row;
+        if (!_isAnchor(row, index)) return row;
         return KeyedSubtree(key: _anchorKey, child: row);
       },
+      findChildIndexCallback: widget.findChildIndexCallback == null
+          ? null
+          : _indexOf,
     );
+  }
+
+  /// Whether [row], built at [index], is the anchor: in a list whose rows
+  /// carry keys, the row the list opened on wherever it is now; otherwise the
+  /// position it opened on.
+  bool _isAnchor(Widget row, int index) {
+    final key = row.key;
+    if (widget.findChildIndexCallback == null || key == null) {
+      return index == _anchor;
+    }
+    if (!_anchorRowKnown && index == _anchor) {
+      _anchorRow = key;
+      _anchorRowKnown = true;
+    }
+    return _anchorRowKnown && key == _anchorRow;
+  }
+
+  /// Where the row with [key] is now; the anchor's wrapper goes where its row
+  /// went.
+  int? _indexOf(Key key) {
+    final find = widget.findChildIndexCallback!;
+    if (key != _anchorKey) return find(key);
+    final row = _anchorRow;
+    return row == null ? null : find(row);
   }
 }

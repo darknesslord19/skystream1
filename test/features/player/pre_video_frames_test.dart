@@ -406,6 +406,42 @@ void main() {
     },
   );
 
+  // Spec 1.8: libVLC and its output are created while the route animates
+  // and the links resolve, not after them.
+  testWidgets(
+    'the native player is created while the links resolve, offstage until '
+    'the media is handed over',
+    variant: texturePlatform,
+    (tester) async {
+      final engine = FakeVlcEngine();
+      installEngineMocks(engine: engine);
+      final client = MockClient((request) async => http.Response('', 200));
+
+      await http.runWithClient(() async {
+        final streams = Completer<List<StreamResult>>();
+        await pumpResolving(tester, streams: streams.future);
+
+        expect(engine.callsTo('create'), hasLength(1));
+        expect(engine.callsTo('setSource'), isEmpty);
+        expect(find.byType(VlcPlayer, skipOffstage: false), findsOneWidget);
+        expect(find.byType(VlcPlayer), findsNothing, reason: 'offstage');
+
+        streams.complete(probed);
+        await settle(tester);
+
+        expect(openedUri(engine), 'https://cdn.test/zero.mkv');
+        expect(
+          engine.callsTo('create'),
+          hasLength(1),
+          reason: 'the player made early is the one that opens the media',
+        );
+        expect(find.byType(VlcPlayer), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox());
+      }, () => client);
+    },
+  );
+
   testWidgets(
     'a row selected while the check runs is the row that opens',
     variant: texturePlatform,

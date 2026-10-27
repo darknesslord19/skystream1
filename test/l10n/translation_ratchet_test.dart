@@ -292,7 +292,7 @@ void main() {
 const Set<String> _topTier = <String>{'hi', 'kn'};
 
 /// Most keys a top-tier locale may lack (`BACKLOG`). Falls, never rises.
-const int _backlog = 62;
+const int _backlog = 50;
 
 const String _template = 'en';
 
@@ -308,6 +308,13 @@ const List<String> _playerKeys = <String>[
   'live',
   'off',
   'retry',
+  'playerQuality',
+  'playerQualityAuto',
+  'playerQualityAutoPlaying',
+  'playerGoLive',
+  'playerBehindLive',
+  'playerReconnecting',
+  'playerWaitingForNetwork',
 ];
 
 /// Keys deleted on purpose, kept here so that deleting them stays deleted.

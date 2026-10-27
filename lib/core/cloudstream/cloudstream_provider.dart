@@ -9,6 +9,7 @@ import '../domain/entity/multimedia_item.dart';
 import '../extensions/base_provider.dart';
 import '../logger/app_logger.dart';
 import '../services/local_proxy_service.dart';
+import '../utils/stream_quality_sorter.dart' show labelStatesQuality;
 import 'cloudstream_engine.dart';
 import 'cloudstream_models.dart';
 
@@ -314,6 +315,7 @@ class CloudStreamProvider extends SkyStreamProvider {
           url: link['url'] as String,
           source: _label(link),
           providerName: name,
+          quality: _adaptiveQuality(link),
           headers: _headers(link),
           subtitles: subtitles,
           drmKid: (link['drm'] as Map?)?['kid'] as String?,
@@ -367,6 +369,18 @@ class CloudStreamProvider extends SkyStreamProvider {
     // CloudStream's Qualities.Unknown is 400, and 0 or less means none.
     final known = quality > 0 && quality != 400 && !name.contains('${quality}p');
     return known ? '$name · ${quality}p' : name;
+  }
+
+  /// `0` - adaptive - for an HLS link with no quality of its own: CloudStream marks a master
+  /// `Qualities.Unknown` (400) unless the extension says otherwise, and the player lists its
+  /// qualities. Null for anything else: a known quality is in the label, and so is one the
+  /// link's name states ("… 360p", "… HD"), which it is ranked by as before.
+  static int? _adaptiveQuality(Map<String, dynamic> link) {
+    final quality = (link['quality'] as num?)?.toInt() ?? 0;
+    final known = quality > 0 && quality != 400;
+    return !known && link['type'] == 'M3U8' && !labelStatesQuality(_label(link))
+        ? 0
+        : null;
   }
 
   static Map<String, String>? _headers(Map<String, dynamic> link) {

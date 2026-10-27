@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart'
     show ProviderListenable;
 import 'package:http/http.dart' as http;
+import 'package:clock/clock.dart';
 
 import '../../../core/addons/data/addon_own_links.dart';
 import '../../../core/addons/data/addon_playback_launcher.dart';
@@ -36,6 +37,7 @@ import '../../../core/utils/app_utils.dart';
 import '../../../core/utils/stream_quality_sorter.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../library/presentation/history_provider.dart';
+import 'source_check.dart';
 import '../../settings/presentation/player_settings_provider.dart';
 
 /// Just enough of Riverpod to read providers. Both `Ref.read` and
@@ -500,9 +502,7 @@ Future<List<StreamResult>> _byQuality(
   PlayerSettings settings,
   void Function(bool) onFallback,
 ) async {
-  final preference = await isOnMeteredNetwork()
-      ? settings.mobileQuality
-      : settings.wifiQuality;
+  final preference = await qualityPreferenceInForce(settings);
   final filtered = filterStreamsByQuality(
     streams,
     preference,
@@ -638,7 +638,7 @@ Future<int> _firstHealthyStream(
     final idx = order[dispatched++];
     onProbe?.call(idx, ProbeOutcome.trying);
     unawaited(
-      _probe(streams[idx])
+      probeSource(streams[idx])
           .then((outcome) => record(idx, outcome))
           .catchError((_) => record(idx, ProbeOutcome.unhealthy)),
     );
@@ -683,7 +683,19 @@ Future<int> _firstHealthyStream(
 bool isUncheckableSource(StreamResult stream) =>
     stream.url.startsWith('magnet:') ||
     stream.url.endsWith('.torrent') ||
-    stream.url.startsWith('/');
+    stream.url.startsWith('/') ||
+    _servedByTorrServer(stream.url);
+
+/// A file the app's torrent server serves from a torrent it holds - a pack
+/// file the viewer picked. Its loopback address answers only while that
+/// torrent is loaded, so a check says nothing about the swarm.
+bool _servedByTorrServer(String url) {
+  final uri = Uri.tryParse(url);
+  return uri != null &&
+      uri.host == '127.0.0.1' &&
+      uri.path == '/stream' &&
+      uri.queryParameters.containsKey('link');
+}
 
 /// The health probe for one source, outside the race: the same ranged GET and
 /// HEAD, for a source opened without having been checked - picked by the
@@ -692,24 +704,63 @@ Future<bool> isReachable(StreamResult stream) async =>
     (await probeSource(stream)).reached;
 
 /// What the health probe finds out about one source, outside the race.
-Future<ProbeOutcome> probeSource(StreamResult stream) => _probe(stream);
+Future<ProbeOutcome> probeSource(StreamResult stream) async =>
+    (await checkSource(stream, headAfterError: true)).outcome;
 
-/// A ranged GET for the first kilobyte, then a HEAD for servers that refuse
-/// it.
+/// How long a check waits for a server's headers (spec *Error handling*:
+/// "checks have the probe's 3 s timeouts").
+const Duration kCheckTimeout = Duration(seconds: 3);
+
+/// A ranged GET for the first kilobyte, with the source's headers, and what it
+/// answered (spec 2: "the check is the player's existing ranged GET, with the
+/// source's headers, so it also yields the HTTP status").
 ///
-/// The GET answers all the check asks in one request: whether the link
+/// The GET answers all the race asks in one request: whether the link
 /// answers, whether its server serves byte ranges - the only way a player can
 /// jump into a file over HTTP - and, from the first bytes, whether it is a
 /// video at all. A HEAD proves only the first, so it is the fallback rather
 /// than the lead: a server that refuses the ranged request but answers a
 /// plain one still counts as reachable, with nothing said about seeking.
-Future<ProbeOutcome> _probe(StreamResult stream) async {
-  if (isUncheckableSource(stream)) return ProbeOutcome.healthy;
+///
+/// What recovery needs is the class (see [CheckResult]), and a dead host
+/// must cost it no more than one timeout: a network error returns at once
+/// with no HEAD - a refused GET means a refused HEAD - and so do the statuses
+/// that settle a class. Only another 4xx, a server that may refuse ranged
+/// GETs, is put to the HEAD. [headAfterError] keeps the race's HEAD after any
+/// failure, which is how it finds slow hosts.
+Future<CheckResult> checkSource(
+  StreamResult stream, {
+  bool headAfterError = false,
+  Duration timeout = kCheckTimeout,
+}) async {
+  final watch = Stopwatch()..start();
+  CheckResult done(
+    CheckClass kind,
+    ProbeOutcome outcome, {
+    int? status,
+    NetworkFault? fault,
+    Duration? retryAfter,
+  }) => CheckResult(
+    kind: kind,
+    outcome: outcome,
+    status: status,
+    fault: fault,
+    retryAfter: retryAfter,
+    elapsed: watch.elapsed,
+  );
 
+  if (isUncheckableSource(stream)) {
+    return done(CheckClass.answers, ProbeOutcome.healthy);
+  }
   final uri = Uri.tryParse(stream.url);
-  if (uri == null || !uri.hasScheme) return ProbeOutcome.unhealthy;
+  if (uri == null || !uri.hasScheme) {
+    return done(CheckClass.gone, ProbeOutcome.unhealthy);
+  }
   final headers = playbackHeaders(stream);
 
+  int? status;
+  Duration? retryAfter;
+  NetworkFault? fault;
   final client = http.Client();
   try {
     final request = http.Request('GET', uri);
@@ -718,50 +769,114 @@ Future<ProbeOutcome> _probe(StreamResult stream) async {
       'Range',
       () => 'bytes=0-${kProbeSniffBytes - 1}',
     );
-    final resp = await client.send(request).timeout(const Duration(seconds: 3));
+    final resp = await client.send(request).timeout(timeout);
     // Nothing to range over: an empty file, which the old one-byte check
     // passed too.
-    if (resp.statusCode == 416) return ProbeOutcome.healthy;
+    if (resp.statusCode == 416) {
+      return done(CheckClass.answers, ProbeOutcome.healthy, status: 416);
+    }
     if (resp.statusCode < 400) {
       final type = resp.headers['content-type'];
       // Only a page or a playlist is worth reading; a server that ignores the
       // range is sending the whole file behind these bytes.
       final head = mayBeWebPage(type)
-          ? await _firstBytes(resp.stream).timeout(
-              const Duration(seconds: 3),
-              onTimeout: () => const <int>[],
-            )
+          ? await _firstBytes(resp.stream)
+                .timeout(timeout, onTimeout: () => const <int>[])
           : const <int>[];
-      return _outcomeOf(uri, resp, head);
+      return done(
+        CheckClass.answers,
+        _outcomeOf(stream.url, uri, resp, head),
+        status: resp.statusCode,
+      );
     }
-  } catch (_) {
-    // Fall through to the HEAD.
+    status = resp.statusCode;
+    retryAfter = retryAfterOf(resp.headers['retry-after'], now: clock.now());
+  } catch (error) {
+    fault = networkFaultOf(error);
   } finally {
     // Hangs up whatever of the body was not read.
     client.close();
   }
 
+  final kind = status == null ? CheckClass.network : checkClassOfStatus(status);
+  CheckResult refused() => done(
+    kind,
+    ProbeOutcome.unhealthy,
+    status: status,
+    fault: kind == CheckClass.network ? fault : null,
+    retryAfter: kind == CheckClass.busy ? retryAfter : null,
+  );
+  final headDecides =
+      status != null &&
+      kind == CheckClass.gone &&
+      !kGoneStatuses.contains(status);
+  if (!headDecides && !headAfterError) return refused();
+
   try {
-    final resp = await http
-        .head(uri, headers: headers)
-        .timeout(const Duration(seconds: 3));
-    if (resp.statusCode < 400) return ProbeOutcome.healthy;
+    final resp = await http.head(uri, headers: headers).timeout(timeout);
+    if (resp.statusCode < 400) {
+      return done(
+        CheckClass.answers,
+        ProbeOutcome.healthy,
+        status: resp.statusCode,
+      );
+    }
   } catch (_) {
-    // No answer to either.
+    // No answer to the HEAD either.
   }
-  return ProbeOutcome.unhealthy;
+  return refused();
 }
 
-/// What an answer to the ranged GET says about playing [url].
-ProbeOutcome _outcomeOf(Uri url, http.BaseResponse resp, List<int> head) {
+/// What an answer to the ranged GET says about playing [url], which the
+/// source names as [address].
+ProbeOutcome _outcomeOf(
+  String address,
+  Uri url,
+  http.BaseResponse resp,
+  List<int> head,
+) {
   final type = resp.headers['content-type'];
   if (isPlaylist(url, type, head)) return ProbeOutcome.healthy;
   if (isWebPage(type, head)) return ProbeOutcome.notVideo;
+  // A media answer: its size is what the buffer rule sizes from.
+  _rememberSize(address, resp);
   final ranged =
       resp.statusCode == 206 ||
       resp.headers.containsKey('content-range') ||
       (resp.headers['accept-ranges']?.toLowerCase().contains('bytes') ?? false);
   return ranged ? ProbeOutcome.healthy : ProbeOutcome.unseekable;
+}
+
+/// The file sizes the health probe read, by address: what the buffer rule
+/// sizes from (spec 1.2), which a [ProbeOutcome] doesn't carry. The newest 64
+/// are kept.
+final Map<String, int> _probedSizes = <String, int>{};
+
+/// The size the health probe read for [url], in bytes, or null when it read
+/// none.
+int? probedSizeOf(String url) => _probedSizes[url];
+
+/// A media answer's file size: the total of its `Content-Range`, or the
+/// `Content-Length` of a 200, which is a server ignoring the range and
+/// sending the whole file.
+@visibleForTesting
+int? fileSizeFromHeaders(int status, Map<String, String> headers) {
+  final range = headers['content-range'];
+  if (range != null) {
+    final total = int.tryParse(range.split('/').last.trim());
+    return total != null && total > 0 ? total : null;
+  }
+  if (status != 200) return null;
+  final length = int.tryParse(headers['content-length'] ?? '');
+  return length != null && length > 0 ? length : null;
+}
+
+void _rememberSize(String url, http.BaseResponse resp) {
+  final size = fileSizeFromHeaders(resp.statusCode, resp.headers);
+  if (size == null) return;
+  _probedSizes.remove(url);
+  _probedSizes[url] = size;
+  if (_probedSizes.length > 64) _probedSizes.remove(_probedSizes.keys.first);
 }
 
 /// Up to [kProbeSniffBytes] from the start of [body]. Leaving the loop early

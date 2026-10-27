@@ -148,4 +148,52 @@ void main() {
     expect(old.streamAddonUrl, isNull);
     expect(old.addonType, isNull);
   });
+
+  group("a stream's quality", () {
+    test('reads the forms plugins write', () {
+      expect(parseStreamQuality(1080), 1080);
+      expect(parseStreamQuality(720.0), 720);
+      expect(parseStreamQuality('1080p'), 1080);
+      expect(parseStreamQuality('720'), 720);
+      expect(parseStreamQuality(' 480P '), 480);
+      expect(parseStreamQuality('4K'), 2160);
+      expect(parseStreamQuality('UHD'), 2160);
+      expect(parseStreamQuality('2K'), 1440);
+      expect(parseStreamQuality('1440p'), 1440);
+      expect(parseStreamQuality('Auto'), 0);
+      expect(parseStreamQuality(0), 0);
+    });
+
+    test("an extractor's Unknown is no quality, and nonsense is ignored", () {
+      // Qualities.Unknown in skystream-extractors and CloudStream: plugins
+      // pass extractor links on as they are.
+      expect(parseStreamQuality(400), isNull);
+      expect(parseStreamQuality(null), isNull);
+      expect(parseStreamQuality('HD'), isNull);
+      expect(parseStreamQuality('Server 2'), isNull);
+      expect(parseStreamQuality(-1), isNull);
+      expect(parseStreamQuality(99999), isNull);
+      expect(parseStreamQuality(double.nan), isNull);
+      expect(parseStreamQuality(true), isNull);
+    });
+
+    test('survives JSON and copyWith, so it reaches the player', () {
+      const stream = StreamResult(
+        url: 'https://cdn.test/master.m3u8',
+        source: 'A',
+        quality: 0,
+      );
+      expect(StreamResult.fromJson(stream.toJson()).quality, 0);
+      expect(
+        StreamResult.fromJson({'url': 'u', 'source': 's', 'quality': '720p'})
+            .quality,
+        720,
+      );
+      expect(
+        StreamResult.fromJson({'url': 'u', 'source': 's'}).quality,
+        isNull,
+      );
+      expect(stream.copyWith(source: 'B').quality, 0);
+    });
+  });
 }

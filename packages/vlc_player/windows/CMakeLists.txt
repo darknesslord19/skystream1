@@ -23,6 +23,7 @@ list(APPEND PLUGIN_SOURCES
   "../src/native/vlc_pixel_buffer_sink.cc"
   "../src/native/vlc_pixel_buffer_sink.h"
   "../src/native/vlc_player_core.cc"
+  "../src/native/vlc_update_pump.cc"
   "../src/native/vlc_player_core.h"
   "../src/native/vlc_player_types.h"
   "../src/native/vlc_subtitle_look.c"
@@ -31,6 +32,8 @@ list(APPEND PLUGIN_SOURCES
   "../src/native/vlc_video_output.h"
   "vlc_player_plugin.cpp"
   "vlc_player_plugin.h"
+  "vlc_plugin_cache.cpp"
+  "vlc_plugin_cache.h"
 )
 
 # Define the plugin library target. Its name must not be changed (see comment
@@ -216,6 +219,15 @@ set(vlc_player_bundled_libraries
   ""
   PARENT_SCOPE
 )
+# The runtime's folders are copied beside the app on every build. Only what
+# changed: rewriting all 360 plugin DLLs gave them new times on each build, and
+# libVLC throws away any plugin cache entry whose time does not match (see
+# vlc_plugin_cache.h), so every debug launch scanned every plugin again.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.26")
+  set(vlc_player_copy_directory copy_directory_if_different)
+else()
+  set(vlc_player_copy_directory copy_directory)
+endif()
 if(EXISTS "${VLC_PLAYER_RUNTIME_DIR}/libvlc.dll" AND
    EXISTS "${VLC_PLAYER_RUNTIME_DIR}/libvlccore.dll" AND
    EXISTS "${VLC_PLAYER_RUNTIME_DIR}/plugins" AND
@@ -229,8 +241,12 @@ if(EXISTS "${VLC_PLAYER_RUNTIME_DIR}/libvlc.dll" AND
     "${VLC_PLAYER_RUNTIME_DIR}/sdk/lib/libvlc.lib")
 
   file(GLOB VLC_PLAYER_RUNTIME_DLLS "${VLC_PLAYER_RUNTIME_DIR}/*.dll")
+  # libVLC's plugin cache generator, run by the installer on the installed
+  # plugins (see vlc_plugin_cache.h and windows/packaging/exe/setup.iss). It
+  # imports libvlc.dll, so it lives beside it.
   set(vlc_player_bundled_libraries
     ${VLC_PLAYER_RUNTIME_DLLS}
+    "${VLC_PLAYER_RUNTIME_DIR}/vlc-cache-gen.exe"
     PARENT_SCOPE
   )
 
@@ -239,7 +255,7 @@ if(EXISTS "${VLC_PLAYER_RUNTIME_DIR}/libvlc.dll" AND
       if(EXISTS "${VLC_PLAYER_RUNTIME_DIR}/${vlc_player_runtime_directory}")
         add_custom_target(
           ${PLUGIN_NAME}_copy_${vlc_player_runtime_directory} ALL
-          COMMAND "${CMAKE_COMMAND}" -E copy_directory
+          COMMAND "${CMAKE_COMMAND}" -E ${vlc_player_copy_directory}
           "${VLC_PLAYER_RUNTIME_DIR}/${vlc_player_runtime_directory}"
           "$<TARGET_FILE_DIR:${BINARY_NAME}>/${vlc_player_runtime_directory}")
       endif()
@@ -306,7 +322,7 @@ endforeach()
 foreach(vlc_player_runtime_directory hrtfs locale lua plugins skins)
   if(EXISTS "${VLC_PLAYER_RUNTIME_DIR}/${vlc_player_runtime_directory}")
     add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory
+      COMMAND "${CMAKE_COMMAND}" -E ${vlc_player_copy_directory}
       "${VLC_PLAYER_RUNTIME_DIR}/${vlc_player_runtime_directory}"
       "$<TARGET_FILE_DIR:${TEST_RUNNER}>/${vlc_player_runtime_directory}")
   endif()

@@ -23,7 +23,10 @@ A macOS Flutter plugin for video playback using VideoLAN VLCKit.
   s.source_files = 'vlc_player/Sources/vlc_player/**/*.{swift,h,mm,cc}'
   # Only the Objective-C renderer belongs in the generated umbrella header;
   # that umbrella is compiled as Objective-C, and the shared headers are C++.
-  s.public_header_files = 'vlc_player/Sources/vlc_player/VlcTextureRenderer.h'
+  s.public_header_files = [
+    'vlc_player/Sources/vlc_player/VlcTextureRenderer.h',
+    'vlc_player/Sources/vlc_player/VlcPlayerEvents.h',
+  ]
   s.resource_bundles = {'vlc_player_privacy' => ['vlc_player/Sources/vlc_player/PrivacyInfo.xcprivacy']}
 
   s.dependency 'FlutterMacOS'

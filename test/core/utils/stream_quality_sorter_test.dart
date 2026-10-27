@@ -110,6 +110,96 @@ void main() {
     });
   });
 
+  test('each preference stands for its height, and Any for none', () {
+    expect(qualityPreferenceHeight(QualityPreference.any), isNull);
+    expect(qualityPreferenceHeight(QualityPreference.q360), 360);
+    expect(qualityPreferenceHeight(QualityPreference.q480), 480);
+    expect(qualityPreferenceHeight(QualityPreference.q720), 720);
+    expect(qualityPreferenceHeight(QualityPreference.q1080), 1080);
+    expect(qualityPreferenceHeight(QualityPreference.q4k), 2160);
+  });
+
+  group('adaptive streams', () {
+    StreamResult hls(
+      String label, {
+      String url = 'https://cdn.test/master.m3u8',
+      int? quality,
+    }) => StreamResult(
+      url: url,
+      source: label,
+      providerName: 'Plugin',
+      quality: quality,
+    );
+
+    test('an HLS link with no quality ranks with the preference, after the '
+        'links labelled with it', () {
+      final sorted = sortStreamsByQuality([
+        sourceLabelled('Server 2'),
+        hls('Server 1'),
+        sourceLabelled('480p'),
+        sourceLabelled('1080p'),
+      ], QualityPreference.q1080);
+      expect(
+        [for (final s in sorted) s.source],
+        ['1080p', 'Server 1', '480p', 'Server 2'],
+      );
+    });
+
+    test('a stream that says Auto is adaptive, whatever its address and '
+        'label say', () {
+      final sorted = sortStreamsByQuality([
+        sourceLabelled('720p'),
+        hls('Server 360p', url: 'https://cdn.test/watch?id=7', quality: 0),
+      ], QualityPreference.q1080);
+      expect(sorted.first.url, 'https://cdn.test/watch?id=7');
+    });
+
+    test('the quality a plugin gives outranks its label', () {
+      final sorted = sortStreamsByQuality([
+        hls('Server 1080p', url: 'https://cdn.test/a.mp4', quality: 480),
+        sourceLabelled('720p'),
+      ], QualityPreference.q1080);
+      expect([for (final s in sorted) s.source], ['720p', 'Server 1080p']);
+      expect(qualityBadgeLabel(sorted.last), '480p');
+    });
+
+    test('an HLS link with a quality in its label ranks by it, as before', () {
+      final sorted = sortStreamsByQuality([
+        hls('Server · 480p'),
+        sourceLabelled('720p'),
+      ], QualityPreference.q1080);
+      expect(sorted.first.source, '720p');
+    });
+
+    test('a proxied or inline playlist is HLS too', () {
+      // MAGIC_PROXY carries the real address in its query; a magic_m3u8
+      // playlist is served as /<id>.m3u8.
+      final sorted = sortStreamsByQuality([
+        sourceLabelled('Server 2'),
+        hls(
+          'A',
+          url: 'http://127.0.0.1:4321/proxy?url=https%3A%2F%2Fcdn.test%2Fmaster.m3u8',
+        ),
+        hls('B', url: 'http://127.0.0.1:4321/5b1c.m3u8'),
+      ], QualityPreference.q720);
+      expect(sorted.last.source, 'Server 2');
+    });
+
+    test('the filter keeps an adaptive stream, and drops a quality the '
+        'plugin gave below the preference', () {
+      final kept = filterStreamsByQuality(
+        [
+          hls('Server 1'),
+          hls('Server 2', url: 'https://cdn.test/a.mp4', quality: 480),
+          sourceLabelled('1080p'),
+        ],
+        QualityPreference.q1080,
+        QualityFilterMode.atOrAbove,
+      );
+      expect([for (final s in kept) s.source], ['Server 1', '1080p']);
+    });
+  });
+
   // Wired televisions and desktops are core targets, and connectivity_plus
   // never reports `wifi` for any of them.
   group('isOnMeteredNetwork', () {
@@ -156,5 +246,25 @@ void main() {
           .setMockMethodCallHandler(channel, null);
       expect(await isOnMeteredNetwork(), isTrue);
     });
+
+    test(
+      "the preference in force is mobile data's on a metered link",
+      () async {
+        const settings = PlayerSettings(
+          wifiQuality: QualityPreference.q1080,
+          mobileQuality: QualityPreference.q480,
+        );
+        answerWith(const ['mobile']);
+        expect(
+          await qualityPreferenceInForce(settings),
+          QualityPreference.q480,
+        );
+        answerWith(const ['ethernet']);
+        expect(
+          await qualityPreferenceInForce(settings),
+          QualityPreference.q1080,
+        );
+      },
+    );
   });
 }

@@ -36,10 +36,15 @@ import 'package:skystream/core/storage/history_repository.dart';
 import 'package:skystream/core/storage/settings_repository.dart';
 import 'package:skystream/core/storage/storage_service.dart';
 import 'package:skystream/core/providers/device_info_provider.dart';
+import 'package:skystream/core/providers/device_memory.dart';
 import 'package:skystream/features/library/presentation/history_provider.dart';
+import 'package:skystream/features/player/domain/source_check.dart';
+import 'package:skystream/features/player/domain/stream_resolver.dart'
+    show ProbeOutcome;
 import 'package:skystream/features/player/presentation/vlc/panel/player_panel.dart'
     show SubtitleStyleBinding;
 import 'package:skystream/features/player/presentation/vlc/side_car_fetch.dart';
+import 'package:skystream/features/player/presentation/vlc/source_check_provider.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
 import 'package:skystream/features/settings/presentation/player_settings_provider.dart';
@@ -80,6 +85,36 @@ const String wakelockToggle =
     'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle';
 final ByteData? wakelockReply = const StandardMessageCodec().encodeMessage(
   <Object?>[null],
+);
+
+/// Connectivity changes as connectivity_plus reports them: `['none']` for no
+/// network, `['wifi']` or `['mobile']` for one. Delivered as the platform
+/// would, like [sendSnapshot]: the mock stream handler's own sink belongs to
+/// `setUp`'s zone, and its events would wait for the end of the test.
+Future<void> sendConnectivity(WidgetTester tester, List<String> results) async {
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    connectivityStatus.name,
+    connectivityStatus.codec.encodeSuccessEnvelope(results),
+    null,
+  );
+  await tester.pump();
+}
+
+/// A recovery check that always finds the server answering: the default, so
+/// a test about anything else sees today's reopen after its back-off.
+Future<CheckResult> answeringCheck(StreamResult stream) async =>
+    const CheckResult(
+      kind: CheckClass.answers,
+      outcome: ProbeOutcome.healthy,
+      status: 206,
+    );
+
+/// A recovery check that finds the link gone (404): a source that fails is
+/// given up on at once, for a test about what follows a failover.
+Future<CheckResult> goneCheck(StreamResult stream) async => const CheckResult(
+  kind: CheckClass.gone,
+  outcome: ProbeOutcome.unhealthy,
+  status: 404,
 );
 
 /// A 1080p television at the density Android TV reports: a 1920x1080 panel at
@@ -286,7 +321,24 @@ void installEngineMocks({FakeVlcEngine? engine}) {
     connectivityStatus,
     MockStreamHandler.inline(onListen: (arguments, sink) {}),
   );
+  // Read at every open by the buffer rule. A channel nobody answers never
+  // completes in a widget test, so the open would wait for it forever; Linux
+  // reads /proc/meminfo instead, which would be the test machine's.
+  messenger.setMockMethodCallHandler(
+    deviceMemoryChannel,
+    (call) async => harnessMemory,
+  );
+  debugMeminfo = () => 'MemTotal: 4194304 kB\nMemAvailable: 2097152 kB\n';
 }
+
+/// The memory reading the harness's device answers with: 4 GB, half of it
+/// free, so the buffer rule's cap is 256 MB. Linux's `/proc/meminfo` says the
+/// same.
+const Map<String, Object?> harnessMemory = <String, Object?>{
+  'totalMb': 4096,
+  'freeMb': 2048,
+  'lowRam': false,
+};
 
 void removeEngineMocks() {
   final messenger =
@@ -297,6 +349,8 @@ void removeEngineMocks() {
   messenger.setMockMethodCallHandler(pipChannel, null);
   messenger.setMockMethodCallHandler(connectivityChannel, null);
   messenger.setMockStreamHandler(connectivityStatus, null);
+  messenger.setMockMethodCallHandler(deviceMemoryChannel, null);
+  debugMeminfo = null;
 }
 
 /// The overlay's spinner never stops, so `pumpAndSettle` cannot be used once
@@ -465,6 +519,8 @@ Future<void> pumpPlayer(
           ),
         if (!brought(sideCarFetchProvider))
           sideCarFetchProvider.overrideWithValue(servedSubtitle),
+        if (!brought(sourceCheckProvider))
+          sourceCheckProvider.overrideWithValue(answeringCheck),
         ...overrides,
       ],
       child: MaterialApp(

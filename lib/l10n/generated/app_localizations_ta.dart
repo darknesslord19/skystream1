@@ -1391,7 +1391,7 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'தரத்திற்கு உத்தரவாதம் இல்லை. மூலங்கள் இந்த விருப்பத்தின்படி வரிசைப்படுத்தப்படும், பல தரங்களைக் கொண்ட ஸ்ட்ரீம் இந்தத் தரத்தில் அல்லது அதற்குக் கீழே உள்ள மிக அருகிலுள்ள தரத்தில் இயங்கும். இயக்கம் வழங்குநர் உண்மையில் என்ன வழங்குகிறார் என்பதைப் பொறுத்தது.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1520,6 +1520,16 @@ class AppLocalizationsTa extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1564,6 +1574,9 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2397,4 +2410,36 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'பின்னணி';
+
+  @override
+  String get playerQuality => 'தரம்';
+
+  @override
+  String get playerQualityAuto => 'தானியங்கி';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'தானியங்கி · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'தானியங்கி (பரிந்துரைக்கப்பட்டது)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'ஒவ்வொரு வீடியோவுக்கும் அதன் பிட்ரேட் மற்றும் இந்தச் சாதனத்தின் நினைவகத்தைப் பொறுத்து அளவு அமைகிறது.';
+
+  @override
+  String get devQoeLog => 'QoE பதிவு';
+
+  @override
+  String get devQoeLogSubtitle => 'இயக்க நேரங்களை ஆப்ஸ் பதிவில் எழுதுகிறது';
+
+  @override
+  String get playerGoLive => 'நேரலைக்குச் செல்';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'நேரலையை விட $time பின்னால்';
+  }
 }

@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Anahtarı (İsteğe Bağlı)",
   "enterKeyToOverrideDefault": "Varsayılanın yerine geçecek anahtarı girin",
   "getApiKeyFromProfile": "API anahtarınızı SubSource profilinizden alın",
-  "qualityNotGuaranteed": "Kalite garanti edilmez. Kaynaklar tercihe göre sıralanır, ancak oynatma sağlayıcının gerçekte sunduğuna bağlıdır.",
+  "qualityNotGuaranteed": "Kalite garanti edilmez. Kaynaklar bu tercihe göre sıralanır ve birden fazla kalite sunan bir yayın bu kalitede ya da altındaki en yakın kalitede oynatılır. Oynatma, sağlayıcının gerçekte ne sunduğuna bağlıdır.",
   "keepSourcesOriginalOrder": "Kaynakları orijinal sırada tut",
   "openLink": "Bağlantıyı aç",
   "@loggedInAs": {
@@ -635,6 +635,15 @@
   "actorRoleMain": "Başrol",
   "actorRoleSupporting": "Yardımcı rol",
   "actorRoleBackground": "Figüran",
+  "playerQuality": "Kalite",
+  "playerQualityAuto": "Otomatik",
+  "playerQualityAutoPlaying": "Otomatik · {height}",
+  "networkBufferAuto": "Otomatik (önerilen)",
+  "networkBufferAutoHint": "Her video için bit hızına ve bu cihazın belleğine göre boyutlandırılır.",
+  "devQoeLog": "QoE günlüğü",
+  "devQoeLogSubtitle": "Oynatma zamanlamalarını uygulama günlüğüne yazar",
+  "playerGoLive": "Canlıya git",
+  "playerBehindLive": "Canlıdan {time} geride",
   "addonHealthChecking": "Eklenti denetleniyor…",
   "addonHealthWorking": "Çalışıyor · {ms} ms",
   "addonHealthUnavailable": "Kullanılamıyor",
@@ -885,5 +894,7 @@
   "swipeAgainToBoost": "%100'ün üzerine çıkmak için tekrar yukarı kaydırın",
   "colorTheme": "Renk teması",
   "colorThemeDynamic": "Dinamik (cihaz renkleri)",
-  "colorThemeHint": "Bir vurgu rengi ve arka plan seçin. Dinamik, duvar kağıdınızı izler."
+  "colorThemeHint": "Bir vurgu rengi ve arka plan seçin. Dinamik, duvar kağıdınızı izler.",
+  "playerTorrentPeers": "{connected}/{total} eş · {speed} · {loaded} yüklendi",
+  "playerWaitingForNetwork": "Ağ bekleniyor…"
 }

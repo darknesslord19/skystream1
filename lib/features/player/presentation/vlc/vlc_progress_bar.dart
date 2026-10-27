@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:vlc_player/vlc_player.dart';
 
 import '../../../skip/data/skip_service.dart';
+import '../../domain/live_window.dart';
 import '../widgets/player_stream_widgets.dart';
 
 /// The seek bar for the VLC engine.
@@ -35,6 +36,8 @@ class VlcProgressBar extends StatefulWidget {
     this.focusNode,
     this.onSeekStart,
     this.onSeekEnd,
+    this.liveSegment,
+    this.onLiveSeek,
     super.key,
   });
 
@@ -91,6 +94,14 @@ class VlcProgressBar extends StatefulWidget {
   /// the rest of the session.
   final void Function(Duration? target)? onSeekEnd;
 
+  /// A live stream's target duration, which sets the stretch of its window
+  /// the bar offers; null assumes [kAssumedTargetDuration].
+  final Duration? liveSegment;
+
+  /// Seeks a live stream to a fraction of its window. Null asks the
+  /// controller directly ([VlcPlayerController.seekToWindowFraction]).
+  final ValueChanged<double>? onLiveSeek;
+
   @override
   State<VlcProgressBar> createState() => _VlcProgressBarState();
 }
@@ -128,13 +139,29 @@ class _VlcProgressBarState extends State<VlcProgressBar> {
   ///
   /// A target needs a length to be drawn against; with none, the media under
   /// the controller has changed and the target was the old one's.
+  ///
+  /// On a live stream with a window, the same three, counted from the
+  /// window's start.
   Duration get _shown {
     final value = widget.controller.value;
     final target = value.duration > Duration.zero
         ? widget.controller.pendingSeekTarget.value
         : null;
-    return _dragTo ?? target ?? value.position;
+    final window = _window(value);
+    if (window == null) return _dragTo ?? target ?? value.position;
+    final dragged = _dragTo;
+    if (dragged != null) return dragged;
+    final start = value.position - window.length * window.fraction;
+    final at = (target ?? value.position) - start;
+    if (at < Duration.zero) return Duration.zero;
+    return at > window.length ? window.length : at;
   }
+
+  /// The window a live stream can be moved in, or null: not live, or a feed
+  /// with no window (spec section 8).
+  LiveWindow? _window(VlcPlayerValue value) => widget.isLive
+      ? LiveWindow.of(value, targetDuration: widget.liveSegment)
+      : null;
 
   /// A seek was asked for, or arrived: the thumb and the clock move with it.
   /// Both are outside a build - [VlcPlayerController.seekTo] and the
@@ -181,6 +208,17 @@ class _VlcProgressBarState extends State<VlcProgressBar> {
   @override
   void dispose() {
     _stopListening(widget.controller);
+    // A drag or a D-pad burst this bar opened never gets its end once the
+    // bar is gone - the lock takes it away under a finger - and the controls'
+    // seek hold would stay up, hiding the spinner. Told after this frame:
+    // the controls rebuild, which they can't inside this unmount.
+    if (_seeking) {
+      _seeking = false;
+      final onSeekEnd = widget.onSeekEnd;
+      if (onSeekEnd != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => onSeekEnd(null));
+      }
+    }
     super.dispose();
   }
 
@@ -239,6 +277,8 @@ class _VlcProgressBarState extends State<VlcProgressBar> {
   }
 
   Widget _body(VlcPlayerValue value, double buffered) {
+    final window = _window(value);
+    if (window != null) return _liveBody(window);
     final duration = value.duration;
     final hasDuration = duration > Duration.zero;
     // Live is a verdict - the app's or the engine's, which every native
@@ -279,6 +319,50 @@ class _VlcProgressBarState extends State<VlcProgressBar> {
         final target = Duration(milliseconds: ms.round());
         _commitSeek(target);
         _endSeek(target);
+      },
+    );
+  }
+
+  /// The bar over a live window: it spans the window with live at its right
+  /// end, and only the stretch libVLC will play from can be picked. A release
+  /// goes to the engine as a fraction of the window.
+  Widget _liveBody(LiveWindow window) {
+    final lengthMs = window.length.inMilliseconds;
+    Duration within(double ms) => Duration(
+      milliseconds: ms
+          .clamp(window.startFraction * lengthMs, window.endFraction * lengthMs)
+          .round(),
+    );
+    return PlayerScrubber(
+      position: _shown,
+      duration: window.length,
+      // libVLC keeps nothing it has played, so there is no band to show.
+      bufferRatio: 0,
+      canSeek: true,
+      isTv: widget.isTv,
+      focusNode: widget.focusNode,
+      onChangeStart: (ms) {
+        _beginSeek();
+        setState(() => _dragTo = within(ms));
+        _publish();
+      },
+      onChanged: (ms) {
+        setState(() => _dragTo = within(ms));
+        _publish();
+      },
+      onChangeEnd: (ms) {
+        final fraction = within(ms).inMilliseconds / lengthMs;
+        final seek = widget.onLiveSeek;
+        if (seek != null) {
+          seek(fraction);
+        } else {
+          widget.controller.seekToWindowFraction(fraction);
+        }
+        setState(() => _dragTo = null);
+        _publish();
+        // A place in the window is not a position the overlay can count its
+        // next step from: it steps from the seek on its way instead.
+        _endSeek(null);
       },
     );
   }

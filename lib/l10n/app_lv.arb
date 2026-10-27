@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Kvalitāte netiek garantēta. Avoti tiek kārtoti pēc šīs preferences, un straume ar vairākām kvalitātēm tiek atskaņota šajā vai tuvākajā zemākajā. Atskaņošana ir atkarīga no tā, ko nodrošinātājs patiešām piedāvā.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Lomās: {names}",
   "actorRoleMain": "Galvenā",
   "actorRoleSupporting": "Otrā plāna",
-  "actorRoleBackground": "Epizodiskā"
+  "actorRoleBackground": "Epizodiskā",
+  "playerQuality": "Kvalitāte",
+  "playerQualityAuto": "Automātiski",
+  "playerQualityAutoPlaying": "Automātiski · {height}",
+  "networkBufferAuto": "Automātiski (ieteicams)",
+  "networkBufferAutoHint": "Izmērs katram video tiek noteikts pēc tā bitu pārraides ātruma un šīs ierīces atmiņas.",
+  "devQoeLog": "QoE žurnāls",
+  "devQoeLogSubtitle": "Ieraksta atskaņošanas laikus lietotnes žurnālā",
+  "playerGoLive": "Uz tiešraidi",
+  "playerBehindLive": "{time} aiz tiešraides"
 }

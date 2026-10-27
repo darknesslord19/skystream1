@@ -118,10 +118,9 @@ void main() {
     expect(find.text('Play S1 E1'), findsOneWidget);
   });
 
-  testWidgets('a show published as `other` is searched for by episode', (
-    tester,
-  ) async {
-    // It was searched for as a movie: by the show's id, not an episode's.
+  testWidgets('a show published as `other` says which episode its search is '
+      'for', (tester) async {
+    // It asked for the first episode, but was labelled as a film's search.
     await openStremioPage(tester, kBridgeShow, links: const []);
     expect(find.text('Search add-ons: S1 E1'), findsOneWidget);
   });

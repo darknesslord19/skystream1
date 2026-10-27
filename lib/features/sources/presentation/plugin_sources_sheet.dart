@@ -195,6 +195,18 @@ class _Row {
   StreamResult toStreamResult() => nuvio.toStreamResult();
 }
 
+/// The order the sheet lists links in: quality first, then the provider's
+/// name. HDR wins nothing: every SkyStream path shows it washed out (P1 spec
+/// 6).
+@visibleForTesting
+int comparePluginStreams(NuvioStreamResult a, NuvioStreamResult b) {
+  final rowA = _Row(a);
+  final rowB = _Row(b);
+  final byQuality = rowB.qualityScore.compareTo(rowA.qualityScore);
+  if (byQuality != 0) return byQuality;
+  return rowA.providerName.compareTo(rowB.providerName);
+}
+
 /// Section chrome in the flattened list.
 enum _SectionKind { topPick, ready, unavailableToggle }
 
@@ -483,12 +495,7 @@ class _PluginSourcesSheetState extends ConsumerState<PluginSourcesSheet> {
     final rows = <_Row>[
       for (final stream in _nuvioResult.streams) _Row(stream),
     ];
-    rows.sort((a, b) {
-      final byQuality = b.qualityScore.compareTo(a.qualityScore);
-      if (byQuality != 0) return byQuality;
-      if (a.isHdr != b.isHdr) return a.isHdr ? -1 : 1;
-      return a.providerName.compareTo(b.providerName);
-    });
+    rows.sort((a, b) => comparePluginStreams(a.nuvio, b.nuvio));
     return rows;
   }
 

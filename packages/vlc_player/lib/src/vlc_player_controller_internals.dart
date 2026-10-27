@@ -13,9 +13,11 @@ abstract interface class VlcPlayerControllerInternals {
   /// Detaches and disposes the currently attached native player.
   ///
   /// [viewId] names the view the caller owns, so a teardown that lands after
-  /// its replacement has attached cannot take the live player with it. Null
-  /// detaches whatever is attached.
-  Future<void> detach({int? viewId});
+  /// its replacement has attached cannot take the live player with it.
+  /// [textureId] does the same on the texture path, which never learns its
+  /// view: the texture its create handed back. Both null detaches whatever is
+  /// attached.
+  Future<void> detach({int? viewId, int? textureId});
 
   /// Tells the native player the crop and aspect ratio the widget's fit needs,
   /// so libVLC draws subtitles inside the part of the picture that is shown;

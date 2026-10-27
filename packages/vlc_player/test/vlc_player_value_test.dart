@@ -139,6 +139,30 @@ void main() {
       expect(value.bufferingProgress, 0.42);
     });
 
+    test('reads where playback is in a live window, as a fraction', () {
+      const previous = VlcPlayerValue();
+      final inWindow = VlcPlayerValue.fromEvent(<String, Object?>{
+        'positionFraction': 0.75,
+      }, previous);
+      expect(inWindow.positionFraction, 0.75);
+
+      // A snapshot without it keeps the last reading.
+      expect(
+        VlcPlayerValue.fromEvent(<String, Object?>{
+          'position': 1000,
+        }, inWindow).positionFraction,
+        0.75,
+      );
+      // libVLC's -1 for no media, or anything outside 0..1, clears it.
+      expect(
+        VlcPlayerValue.fromEvent(<String, Object?>{
+          'positionFraction': -1,
+        }, inWindow).positionFraction,
+        isNull,
+      );
+      expect(inWindow, isNot(previous));
+    });
+
     test('accepts numeric variants from platform event channels', () {
       final value = VlcPlayerValue.fromEvent(<String, Object?>{
         'state': 'playing',
@@ -554,6 +578,205 @@ void main() {
         }, playing);
         expect(value.state.name, name);
       }
+    });
+  });
+
+  group('a held picture', () {
+    const held = VlcPlayerValue(
+      state: VlcPlaybackState.playing,
+      videoSize: Size(1920, 1080),
+      codedVideoSize: Size(1920, 1088),
+      videoOrientation: VlcVideoOrientation.topLeft,
+    );
+
+    test('keeps its size through the new media\'s opening', () {
+      final next = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+        'pictureHeld': true,
+      }, held);
+
+      expect(next.isPictureHeld, isTrue);
+      expect(next.videoSize, const Size(1920, 1080));
+      expect(next.codedVideoSize, const Size(1920, 1088));
+      expect(next.videoOrientation, VlcVideoOrientation.topLeft);
+    });
+
+    test('ignores the new media\'s size until the hold ends', () {
+      final during = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'playing',
+        'pictureHeld': true,
+        'videoSize': <String, Object?>{'width': 1280, 'height': 720},
+        'codedSize': <String, Object?>{'width': 1280, 'height': 720},
+      }, held);
+      expect(during.videoSize, const Size(1920, 1080));
+      expect(during.codedVideoSize, const Size(1920, 1088));
+
+      final after = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'playing',
+        'pictureHeld': false,
+        'videoSize': <String, Object?>{'width': 1280, 'height': 720},
+        'codedSize': <String, Object?>{'width': 1280, 'height': 720},
+      }, during);
+      expect(after.isPictureHeld, isFalse);
+      expect(after.videoSize, const Size(1280, 720));
+      expect(after.codedVideoSize, const Size(1280, 720));
+    });
+
+    test('a backend that never says it holds clears the size on opening, as '
+        'before', () {
+      final next = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+      }, held);
+
+      expect(next.isPictureHeld, isFalse);
+      expect(next.videoSize, isNull);
+      expect(next.codedVideoSize, isNull);
+    });
+  });
+
+  group('a held picture\'s media', () {
+    // What a screen draws its controls from while it waits over the held
+    // picture: the media before's, until the hold ends (FORK.md 33).
+    const before = VlcPlayerValue(
+      state: VlcPlaybackState.playing,
+      position: Duration(minutes: 40),
+      duration: Duration(minutes: 50),
+      isSeekable: true,
+      videoSize: Size(1920, 1080),
+    );
+
+    test('keeps the length, the seeking and the liveness while it opens', () {
+      final opening = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+        'position': 0,
+        'duration': 0,
+        'isSeekable': false,
+        'isLive': true,
+        'pictureHeld': true,
+      }, before);
+
+      expect(opening.position, Duration.zero);
+      expect(opening.duration, const Duration(minutes: 50));
+      expect(opening.isSeekable, isTrue);
+      expect(opening.isLive, isFalse);
+    });
+
+    test('takes a length and seeking the new media knows', () {
+      final buffering = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'buffering',
+        'duration': 3060000,
+        'isSeekable': true,
+        'pictureHeld': true,
+      }, before.copyWith(isSeekable: false));
+
+      expect(buffering.duration, const Duration(milliseconds: 3060000));
+      expect(buffering.isSeekable, isTrue);
+    });
+
+    test('lets go of them with the hold', () {
+      final played = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'playing',
+        'position': 2400000,
+        'duration': 0,
+        'isSeekable': false,
+        'isLive': true,
+        'pictureHeld': false,
+      }, before.copyWith(isPictureHeld: true));
+
+      expect(played.isPictureHeld, isFalse);
+      expect(played.duration, Duration.zero);
+      expect(played.isSeekable, isFalse);
+      expect(played.isLive, isTrue);
+    });
+  });
+
+  test('an error keeps the size of the picture still on screen', () {
+    // The output keeps showing a picture after a failure - a held one, or
+    // the failed media's last - and a screen offers its retry over it.
+    const playing = VlcPlayerValue(
+      state: VlcPlaybackState.playing,
+      videoSize: Size(1920, 1080),
+      codedVideoSize: Size(1920, 1088),
+      videoOrientation: VlcVideoOrientation.topLeft,
+    );
+
+    final failed = VlcPlayerValue.fromEvent(const <String, Object?>{
+      'state': 'error',
+    }, playing);
+
+    expect(failed.state, VlcPlaybackState.error);
+    expect(failed.videoSize, const Size(1920, 1080));
+    expect(failed.codedVideoSize, const Size(1920, 1088));
+    expect(failed.videoOrientation, VlcVideoOrientation.topLeft);
+  });
+
+  test('the wait for the video surface is read and kept', () {
+    final waited = VlcPlayerValue.fromEvent(const <String, Object?>{
+      'state': 'opening',
+      'videoSurfaceWaitMs': 3200,
+    }, const VlcPlayerValue());
+    expect(waited.videoSurfaceWait, const Duration(milliseconds: 3200));
+
+    final later = VlcPlayerValue.fromEvent(const <String, Object?>{
+      'state': 'playing',
+    }, waited);
+    expect(later.videoSurfaceWait, const Duration(milliseconds: 3200));
+  });
+
+  group('the prebuffer', () {
+    test('is kept while the media opens', () {
+      final next = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+        'bufferingProgress': 0.4,
+      }, const VlcPlayerValue());
+
+      expect(next.bufferingProgress, 0.4);
+    });
+
+    test('is cleared once the media plays', () {
+      final opening = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+        'bufferingProgress': 0.4,
+      }, const VlcPlayerValue());
+      final playing = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'playing',
+      }, opening);
+
+      expect(playing.bufferingProgress, isNull);
+    });
+  });
+
+  group('the start gate', () {
+    test('is read from Android\'s startGated', () {
+      final gated = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+        'startGated': true,
+      }, const VlcPlayerValue());
+      expect(gated.isStartGated, isTrue);
+
+      final started = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'buffering',
+        'startGated': false,
+      }, gated);
+      expect(started.isStartGated, isFalse);
+    });
+
+    test('is false where a backend never says', () {
+      final next = VlcPlayerValue.fromEvent(const <String, Object?>{
+        'state': 'opening',
+      }, const VlcPlayerValue(isStartGated: true));
+
+      expect(next.isStartGated, isFalse);
+    });
+
+    test('takes part in equality, hashCode and copyWith', () {
+      const value = VlcPlayerValue();
+      final gated = value.copyWith(isStartGated: true);
+
+      expect(value.isStartGated, isFalse);
+      expect(gated, isNot(value));
+      expect(gated.hashCode, isNot(value.hashCode));
+      expect(gated.copyWith(isStartGated: false), value);
     });
   });
 }

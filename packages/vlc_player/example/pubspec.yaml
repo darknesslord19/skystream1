@@ -58,6 +58,8 @@ flutter:
   assets:
     - assets/format_fixtures/
     - assets/format_fixtures/hls/
+    - assets/format_fixtures/keep_picture/
+    - assets/format_fixtures/keep_picture/hls/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

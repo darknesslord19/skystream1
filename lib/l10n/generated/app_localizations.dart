@@ -2605,10 +2605,10 @@ abstract class AppLocalizations {
   /// **'Get your API Key from SubSource Profile'**
   String get getApiKeyFromProfile;
 
-  /// No description provided for @qualityNotGuaranteed.
+  /// Note under the Wi-Fi & Wired and Mobile quality preference pickers: sources are sorted by the preference, and a stream offering several qualities (HLS) plays at it or the nearest below.
   ///
   /// In en, this message translates to:
-  /// **'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.'**
+  /// **'Quality is not guaranteed. Sources are sorted by this preference, and a stream that offers several qualities plays at it, or the nearest below. Playback depends on what the provider actually offers.'**
   String get qualityNotGuaranteed;
 
   /// No description provided for @keepSourcesOriginalOrder.
@@ -2809,6 +2809,17 @@ abstract class AppLocalizations {
   /// **'Preparing torrent…'**
   String get playerPreparingTorrent;
 
+  /// Under 'Preparing torrent…' while a torrent gets ready: peers connected out of those known, the download speed (for example '1.4 MB/s') and how much of the torrent is loaded (for example '24 MB').
+  ///
+  /// In en, this message translates to:
+  /// **'{connected}/{total} peers · {speed} · {loaded} loaded'**
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  );
+
   /// Why one source gave up. A lowercase fragment: it is shown alone when there is only one source, or after a dash in playerNoSourcesPlayableWithReason.
   ///
   /// In en, this message translates to:
@@ -2887,11 +2898,17 @@ abstract class AppLocalizations {
   /// **'You\'ve finished {title}'**
   String playerFinished(String title);
 
-  /// Status pill over a frame that has stopped moving, shown from the moment the player first re-issues its request to the source until the position moves again or the source is replaced. Also the opening line while a dropped live feed is being reopened.
+  /// Status pill over a picture that has stopped moving while the player recovers the same source: from the moment it first re-issues its request, or checks the source after a failure, until the position moves again or another source is opened.
   ///
   /// In en, this message translates to:
   /// **'Reconnecting…'**
   String get playerReconnecting;
+
+  /// Status pill over the last picture while the device reports no network and the player waits for it to come back; also the start-up view's status line when nothing has played yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Waiting for network…'**
+  String get playerWaitingForNetwork;
 
   /// The 1x entry in the playback speed list, named rather than numbered.
   ///
@@ -4176,6 +4193,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Background'**
   String get actorRoleBackground;
+
+  /// Player side panel: the tab that chooses which of an HLS stream's qualities plays (Auto, or a height such as 1080p).
+  ///
+  /// In en, this message translates to:
+  /// **'Quality'**
+  String get playerQuality;
+
+  /// Player's Quality tab: the row that lets the player choose, following the device and the viewer's quality preference.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto'**
+  String get playerQualityAuto;
+
+  /// Player's Quality tab: the Auto row while Auto is on, naming the quality it plays now.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto · {height}'**
+  String playerQualityAutoPlaying(String height);
+
+  /// Player settings, network buffer: the choice that sizes the buffer for each video by itself. It is the default.
+  ///
+  /// In en, this message translates to:
+  /// **'Auto (recommended)'**
+  String get networkBufferAuto;
+
+  /// Player settings, network buffer dialog: the line under the Auto choice, saying how Auto sizes the buffer.
+  ///
+  /// In en, this message translates to:
+  /// **'Sized for each video from its bitrate and this device\'s memory.'**
+  String get networkBufferAutoHint;
+
+  /// Developer options: the switch that writes playback-quality (QoE) events to the app log. "QoE" stays as it is.
+  ///
+  /// In en, this message translates to:
+  /// **'QoE log'**
+  String get devQoeLog;
+
+  /// Developer options: the line under the QoE log switch.
+  ///
+  /// In en, this message translates to:
+  /// **'Writes playback timings to the app log'**
+  String get devQoeLogSubtitle;
+
+  /// Player, live stream: the button that jumps back to the live edge.
+  ///
+  /// In en, this message translates to:
+  /// **'Go to live'**
+  String get playerGoLive;
+
+  /// Player, live stream: spoken label for how far behind the live edge playback is, such as "0:42 behind live".
+  ///
+  /// In en, this message translates to:
+  /// **'{time} behind live'**
+  String playerBehindLive(String time);
 }
 
 class _AppLocalizationsDelegate

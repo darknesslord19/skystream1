@@ -142,6 +142,7 @@ public class VlcPlayerPlugin: NSObject, FlutterPlugin {
         httpHeaders: httpHeaders,
         mediaOptions: mediaOptions,
         startPosition: startPosition,
+        keepPicture: arguments["keepPicture"] as? Bool ?? false,
         autoPlay: autoPlay,
         result: result
       )
@@ -160,6 +161,13 @@ public class VlcPlayerPlugin: NSObject, FlutterPlugin {
         return
       }
       player.seekTo(milliseconds: position)
+      result(nil)
+    case "seekToFraction":
+      guard let fraction = Self.doubleValue(arguments["fraction"]), fraction.isFinite, fraction >= 0, fraction <= 1 else {
+        result(FlutterError(code: "invalid_args", message: "A fraction within 0..1 is required.", details: nil))
+        return
+      }
+      player.seekToFraction(fraction)
       result(nil)
     case "setVolume":
       guard let volume = Self.intValue(arguments["volume"]) else {
@@ -407,7 +415,13 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
 
   private let renderTarget: VlcRenderTarget
   private(set) var textureRenderer: VlcTextureRenderer?
-  private let mediaPlayer: VLCMediaPlayer
+  /// libVLC's own events, the held picture and the refused-seek log, which
+  /// VLCKit's delegate doesn't carry; moves with the player (replacePlayer).
+  private var events: VlcPlayerEvents?
+  /// Nil once disposed: dispose() hands the last reference to releaseLater.
+  /// Every caller runs before that - the plugin drops a disposed player from
+  /// its map, and the delegate and event callbacks check isDisposed first.
+  private var mediaPlayer: VLCMediaPlayer!
   private let eventChannel: FlutterEventChannel
   private let eventHandler = VlcPlayerEventStreamHandler()
   private let audioInterruptions = VlcAudioInterruptionObserver()
@@ -428,6 +442,16 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   private var interruption = "none"
   private var holdsAudioSession = false
   private(set) var isDisposed = false
+  /// Whether this player has been given a source: the next one gets a fresh
+  /// player (replacePlayer).
+  private var hasHadSource = false
+  /// The volume last set, for a fresh player; nil until one is set.
+  private var volume: Int32?
+  /// The subtitle look last set, applied again to a fresh player.
+  private var subtitleLook: (
+    textScale: Int, color: Int, backgroundColor: Int, backgroundOpacity: Int,
+    outlineThickness: Int, raise: Double
+  )?
 
   init(
     viewId: Int64,
@@ -446,7 +470,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       // Present in MobileVLCKit 3.7.3's and 3.7.4's option tables.
       instanceOptions.append("--swscale-mode=0")
     }
-    mediaPlayer = VLCMediaPlayer(options: instanceOptions)
+    mediaPlayer = VLCMediaPlayer(library: Self.library(for: instanceOptions))
     // libVLC's own log, which VLCKit drops unless a logger is set: the host's verbose switch (`--verbose=2`) reaches
     // the console only through one. A device's console isn't always within reach, so the same log also goes to
     // vlc-verbose.log in the app's caches, to copy off it.
@@ -479,8 +503,20 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       // when playback starts, and callbacks added after that are ignored.
       textureRenderer = VlcTextureRenderer(mediaPlayer: mediaPlayer)
     }
+    // libVLC's own buffering, track and time events, the held picture, and
+    // its refused-seek log line, which VLCKit's delegate doesn't carry. The
+    // log is read per library (library(for:)), and not under VLCKit's own
+    // loggers, which take libVLC's one callback per instance.
+    events = VlcPlayerEvents(
+      mediaPlayer: mediaPlayer,
+      renderer: textureRenderer,
+      readLog: !instanceOptions.contains("--verbose=2"))
 
     super.init()
+
+    events?.onChanged = { [weak self] in
+      self?.sendSnapshot()
+    }
 
     mediaPlayer.delegate = self
     eventHandler.onListen = { [weak self] in
@@ -498,6 +534,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     httpHeaders: [String: String],
     mediaOptions: [String],
     startPosition: Int,
+    keepPicture: Bool,
     autoPlay: Bool,
     result: @escaping FlutterResult
   ) {
@@ -517,6 +554,11 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     if startPosition > 0 {
       media.addOption(":start-time=\(Double(startPosition) / 1000.0)")
     }
+    if hasHadSource {
+      replacePlayer()
+    }
+    hasHadSource = true
+    events?.arm(withKeepPicture: keepPicture)
     mediaPlayer.media = media
     interruption = "none"
     sendSnapshot(force: true, stateOverride: "opening")
@@ -547,6 +589,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
 
   func stop() {
     interruption = "none"
+    events?.stop()
     mediaPlayer.stop()
     relinquishAudioSession()
     sendSnapshot(stateOverride: "stopped")
@@ -557,8 +600,16 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     sendSnapshot()
   }
 
+  /// A place in a live HLS or DASH window, as libVLC's position fraction.
+  func seekToFraction(_ fraction: Double) {
+    mediaPlayer.position = Float(fraction)
+    sendSnapshot()
+  }
+
   func setVolume(_ volume: Int) {
-    mediaPlayer.audio?.volume = Int32(max(0, min(200, volume)))
+    let clamped = Int32(max(0, min(200, volume)))
+    self.volume = clamped
+    mediaPlayer.audio?.volume = clamped
     sendSnapshot()
   }
 
@@ -589,6 +640,10 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     outlineThickness: Int,
     raise: Double
   ) -> Bool {
+    subtitleLook = (
+      textScale, color, backgroundColor, backgroundOpacity, outlineThickness,
+      raise
+    )
     let height = Double(mediaPlayer.videoSize.height)
     let margin = raise > 0 && height > 0 ? Int((min(raise, 0.5) * height).rounded()) : 0
     return VlcTextureRenderer.applySubtitleLook(
@@ -730,21 +785,153 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     ]
   }
 
+  /// libVLC instances by the options they were made with, kept for the
+  /// process's life, so that no released player ever ends one.
+  ///
+  /// VLCKit gives a player made with options an instance of its own, and
+  /// ending an instance saves libVLC's configuration while holding the
+  /// configuration lock for reading, taken twice (3.0.24 file.c,
+  /// config_AutoSaveConfigFile). Darwin's lock makes a reader wait behind a
+  /// queued writer, and libVLC writes its configuration from its own threads
+  /// (macOS's audio output at every start and close), so an instance ending
+  /// beside such a write deadlocked both, and then every thread that read the
+  /// configuration, main included (FORK.md 23). One instance per set of
+  /// options, which is a handful, and none ends while the app runs.
+  private static var libraries: [[String]: VLCLibrary] = [:]
+
+  /// Main thread only, where every player is made.
+  private static func library(for options: [String]) -> VLCLibrary {
+    if let library = libraries[options] {
+      return library
+    }
+    // Two of VLCKit's defaults off, after the host's options so they win over
+    // VLCKit's own, which it puts in front (VLCLibrary.m, _defaultOptions):
+    // macOS's --play-and-pause, which pauses at every end - a finished film and
+    // a lost connection's false end alike - and volume-save, auhal's write of
+    // the volume into libVLC's configuration at every sound start and volume
+    // change, which can deadlock with the save VLCKit makes after every input
+    // close (FORK.md 32). Nothing reads that configuration back: VLCKit leaves
+    // ignore-config on.
+    let library = VLCLibrary(options: options + ["--no-play-and-pause", "--no-volume-save"])
+    if !options.contains("--verbose=2") {
+      VlcPlayerEvents.readLog(of: library)
+    }
+    libraries[options] = library
+    return library
+  }
+
+  /// Where released players go: concurrent, so one stuck behind a stalled
+  /// download doesn't hold up the next.
+  private static let releaseQueue = DispatchQueue(
+    label: "vlc_player.release", qos: .utility, attributes: .concurrent)
+
+  /// Holds the only reference the plugin has left, so the release happens
+  /// exactly where it is let go.
+  private final class Retired {
+    var player: VLCMediaPlayer?
+    init(_ player: VLCMediaPlayer) { self.player = player }
+  }
+
+  /// Lets [player] go off the main thread, then runs [then] on main.
+  ///
+  /// VLCKit 3.7.4's -[VLCMediaPlayer dealloc] releases the libVLC player,
+  /// which waits for the stream an asynchronous stop began stopping (VLCKit's
+  /// patch 0023): 130 s on a stalled HLS download (spec 3). VLCKit also holds
+  /// the player for two main-queue turns after a stop - its Stopped handler
+  /// runs on main and queues one more block there that sets the idle timer -
+  /// so the reference is kept past both, then let go on a queue of its own.
+  static func releaseLater(_ player: VLCMediaPlayer, then: (() -> Void)? = nil) {
+    let retired = Retired(player)
+    DispatchQueue.main.async {
+      DispatchQueue.main.async {
+        releaseQueue.async {
+          retired.player = nil
+          if let then {
+            DispatchQueue.main.async(execute: then)
+          }
+        }
+      }
+    }
+  }
+
+  /// Puts a fresh player in place for the next source and hands the old one
+  /// to releaseLater.
+  ///
+  /// VLCKit 3.7.4 starts a media set with set_media_async only once the old
+  /// input has closed (patch 0023: play() sets open_next while close_input is
+  /// pending, and the worker thread opens the new input after input_Close),
+  /// and a stalled HLS segment kept that close waiting for as long as the
+  /// stall: a reconnect from a stalled stream could not start. Android,
+  /// Windows and Linux make a fresh player per source too (FORK.md 10 and 21).
+  private func replacePlayer() {
+    let old: VLCMediaPlayer = mediaPlayer
+    let next = VLCMediaPlayer(library: old.libraryInstance)
+    // What VLCKit keeps per player rather than per media. Audio and subtitle
+    // delays are per input in libVLC 3, so every media starts without them.
+    if let volume {
+      next.audio?.volume = volume
+    }
+    let rate = old.rate
+    if rate != 1 {
+      next.rate = rate
+    }
+    old.delegate = nil
+    // libvlc_media_player_stop_async: the stalled stream closes on a thread
+    // of the old player's own, beside the new one.
+    old.stop()
+    old.drawable = nil
+    switch renderTarget {
+    case let .uiKitView(container, _):
+      next.drawable = container
+    case .texture:
+      // The same texture and sink, so the picture on screen stays until the
+      // new player draws.
+      textureRenderer?.attach(to: next)
+    }
+    // The old player's stop is not the new media going: its events stop here.
+    events?.attach(to: next)
+    next.delegate = self
+    mediaPlayer = next
+    if let look = subtitleLook {
+      _ = setSubtitleLook(
+        textScale: look.textScale, color: look.color,
+        backgroundColor: look.backgroundColor,
+        backgroundOpacity: look.backgroundOpacity,
+        outlineThickness: look.outlineThickness, raise: look.raise)
+    }
+    Self.releaseLater(old)
+  }
+
   func dispose() {
     guard !isDisposed else {
       return
     }
     isDisposed = true
+    // libVLC stops calling in before anything else goes.
+    events?.detach()
+    events = nil
     audioInterruptions.stopObserving()
     eventChannel.setStreamHandler(nil)
-    mediaPlayer.delegate = nil
-    mediaPlayer.stop()
-    mediaPlayer.drawable = nil
-    // After stop(), so libVLC has no vout left that could call into a
-    // renderer whose buffers are already gone.
+    let player: VLCMediaPlayer = mediaPlayer
+    player.delegate = nil
+    // libvlc_media_player_stop_async: returns at once, and the stream stops on
+    // a thread of VLCKit's.
+    player.stop()
+    player.drawable = nil
+    // The stopping stream can still draw one last frame; Detach turns any
+    // late callback into a no-op (vlc_video_output.cc).
     textureRenderer?.detach()
     textureRenderer = nil
-    relinquishAudioSession()
+    mediaPlayer = nil
+    let heldSession = holdsAudioSession
+    holdsAudioSession = false
+    Self.releaseLater(player) {
+      // After the player is gone, so VLC's audio unit has stopped before the
+      // session deactivates under it.
+      if heldSession {
+        VlcAudioSession.shared.relinquish()
+      }
+    }
   }
 
   private func handleAudioInterruption(_ event: VlcAudioInterruptionEvent) {
@@ -819,6 +1006,10 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   }
 
   func mediaPlayerStateChanged(_ aNotification: Notification) {
+    // A notification VLCKit queued before dispose() can still arrive.
+    guard !isDisposed else {
+      return
+    }
     if mediaPlayer.state == .ended {
       // Nothing left to play: hold the session no longer, so whatever we
       // interrupted can come back on its own. A playlist advancing takes it
@@ -840,6 +1031,9 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   }
 
   func mediaPlayerTimeChanged(_ aNotification: Notification) {
+    guard !isDisposed else {
+      return
+    }
     sendSnapshot()
   }
 
@@ -856,7 +1050,13 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       return
     }
 
-    let stateName = stateOverride ?? Self.stateName(mediaPlayer)
+    var stateName = stateOverride ?? Self.stateName(mediaPlayer)
+    let prebuffer = events?.bufferingProgress ?? -1
+    // libVLC says "playing" while it fills its buffer; only the Buffering
+    // event says how full it is (one model on every platform, spec 4).
+    if stateOverride == nil && stateName == "playing" && prebuffer >= 0 {
+      stateName = "buffering"
+    }
     let duration = Self.milliseconds(from: mediaPlayer.media?.length)
     let isSeekable = mediaPlayer.isSeekable
     let trackFingerprint = Self.trackFingerprint(mediaPlayer)
@@ -868,6 +1068,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       "state": stateName,
       "position": Self.milliseconds(from: mediaPlayer.time),
       "duration": duration,
+      "positionFraction": Double(mediaPlayer.position),
       "volume": Int(mediaPlayer.audio?.volume ?? 0),
       "playbackSpeed": Double(mediaPlayer.rate),
       "audioDelay": Int(mediaPlayer.currentAudioPlaybackDelay),
@@ -881,6 +1082,14 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       "isLive": Self.isLiveState(stateName) && duration == 0 && !isSeekable,
       "interruption": interruption,
     ]
+    event["pictureHeld"] = events?.pictureHeld ?? false
+    if prebuffer >= 0 {
+      event["bufferingProgress"] = prebuffer
+    }
+    if let events, events.seekRefusals > 0 {
+      event["seekRefusals"] = events.seekRefusals
+      event["seekRefusedAt"] = events.seekRefusedAt
+    }
     if let videoSize = Self.videoSizeMap(mediaPlayer.videoSize) {
       event["videoSize"] = videoSize
     }
@@ -1142,7 +1351,15 @@ final class VlcPlayerEventStreamHandler: NSObject, FlutterStreamHandler {
     return nil
   }
 
+  /// Sends [event] at once on the main thread, where every snapshot is made,
+  /// so an event sent before a method's answer reaches Dart before it:
+  /// setSource's opening snapshot says whether the output holds by the time
+  /// setMedia returns (FORK.md 33). From any other thread it goes to main.
   func send(_ event: [String: Any]) {
+    if Thread.isMainThread {
+      eventSink?(event)
+      return
+    }
     DispatchQueue.main.async { [weak self] in
       self?.eventSink?(event)
     }

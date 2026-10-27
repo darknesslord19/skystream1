@@ -1384,7 +1384,7 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.';
+      'Calitatea nu este garantată. Sursele sunt sortate după această preferință, iar un flux cu mai multe calități rulează la ea sau la cea mai apropiată inferioară. Redarea depinde de ce oferă de fapt furnizorul.';
 
   @override
   String get keepSourcesOriginalOrder => 'Keep sources in original order';
@@ -1512,6 +1512,16 @@ class AppLocalizationsRo extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1556,6 +1566,9 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2388,4 +2401,37 @@ class AppLocalizationsRo extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'Figurant';
+
+  @override
+  String get playerQuality => 'Calitate';
+
+  @override
+  String get playerQualityAuto => 'Automat';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'Automat · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'Automat (recomandat)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'Dimensionat pentru fiecare video după debitul său și memoria acestui dispozitiv.';
+
+  @override
+  String get devQoeLog => 'Jurnal QoE';
+
+  @override
+  String get devQoeLogSubtitle =>
+      'Scrie timpii de redare în jurnalul aplicației';
+
+  @override
+  String get playerGoLive => 'Mergi la live';
+
+  @override
+  String playerBehindLive(String time) {
+    return '$time în urma transmisiunii live';
+  }
 }

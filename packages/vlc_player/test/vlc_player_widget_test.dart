@@ -246,6 +246,64 @@ void main() {
     });
   });
 
+  testWidgets('a create that answers after a remount leaves the new player '
+      'attached', (WidgetTester tester) async {
+    // SkyStream mounts a new VlcPlayer on the same controller when media has
+    // waited 30 s for a native player that never came (FORK.md 27). The
+    // controller disposes the first create's late answer; the outgoing widget
+    // must not then detach the player the new one attached.
+    await runAsWindows(() async {
+      final firstCreate = Completer<void>();
+      var creates = 0;
+      final disposed = <Object?>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(methodChannel, (call) async {
+            if (call.method == 'create') {
+              // Each answer carries its own view, however late it comes.
+              final viewId = ++creates;
+              mockEventChannel(viewId);
+              if (viewId == 1) await firstCreate.future;
+              return <String, Object?>{
+                'viewId': viewId,
+                'textureId': 100 + viewId,
+              };
+            }
+            if (call.method == 'dispose') {
+              disposed.add((call.arguments as Map<Object?, Object?>)['viewId']);
+            }
+            return null;
+          });
+      final controller = VlcPlayerController();
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: VlcPlayer(key: const ValueKey<int>(0), controller: controller),
+        ),
+      );
+      await tester.pump();
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: VlcPlayer(key: const ValueKey<int>(1), controller: controller),
+        ),
+      );
+      await tester.pump();
+      expect(controller.isAttached, isTrue);
+
+      firstCreate.complete();
+      await tester.pump();
+      await tester.pump();
+
+      expect(controller.isAttached, isTrue, reason: 'the new player stays');
+      expect(disposed, <Object?>[1]);
+      expect(tester.widget<Texture>(find.byType(Texture)).textureId, 102);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      controller.dispose();
+    });
+  });
+
   testWidgets('shows a loading indicator while a texture is created', (
     WidgetTester tester,
   ) async {

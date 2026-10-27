@@ -96,6 +96,12 @@ public class FlutterTorrentServerPlugin: NSObject, FlutterPlugin {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue(authToken, forHTTPHeaderField: authTokenHeader)
 
+      // TorrServer answers an add once the torrent's metadata has come, which
+      // takes minutes on a cold magnet: its own limit is 5 (torr/torrent.go).
+      // URLRequest's 60 s default gave up first, inside the player's
+      // 3-minute rule for torrents.
+      request.timeoutInterval = 300
+
       let body: [String: Any] = ["action": "add", "link": link]
       request.httpBody = try? JSONSerialization.data(withJSONObject: body)
       

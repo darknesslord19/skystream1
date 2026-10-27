@@ -91,6 +91,8 @@ class PanelData {
     this.failedSources = const <int>{},
     this.playedSources = const <int>{},
     this.qualityFilteredFallback = false,
+    this.qualityLadder = const <int>[],
+    this.qualityPick,
     this.episodes = const <Episode>[],
     this.currentEpisode,
     this.files = const <TorrentFile>[],
@@ -127,6 +129,15 @@ class PanelData {
   /// Whether the quality filter matched nothing and was dropped.
   final bool qualityFilteredFallback;
 
+  /// The heights the HLS stream playing offers, tallest first, each once;
+  /// empty for anything else. Two or more make the Quality tab.
+  final List<int> qualityLadder;
+
+  /// The cap the viewer's pick in the Quality tab asks for, or null for
+  /// Auto. A step-down can lower a pick to a height the ladder lacks; the tab
+  /// ticks the one that plays under it.
+  final int? qualityPick;
+
   /// The list the next arrow walks, filtered the same way.
   final List<Episode> episodes;
   final Episode? currentEpisode;
@@ -148,6 +159,7 @@ class PanelData {
     sourceCount: sources.length,
     episodeCount: episodes.length,
     fileCount: files.length,
+    qualityCount: qualityLadder.length,
   );
 
   PanelData copyWith({
@@ -157,6 +169,9 @@ class PanelData {
     Set<int>? failedSources,
     Set<int>? playedSources,
     bool? qualityFilteredFallback,
+    List<int>? qualityLadder,
+    int? qualityPick,
+    bool clearQualityPick = false,
     List<Episode>? episodes,
     Episode? currentEpisode,
     bool clearCurrentEpisode = false,
@@ -174,6 +189,8 @@ class PanelData {
       playedSources: playedSources ?? this.playedSources,
       qualityFilteredFallback:
           qualityFilteredFallback ?? this.qualityFilteredFallback,
+      qualityLadder: qualityLadder ?? this.qualityLadder,
+      qualityPick: clearQualityPick ? null : qualityPick ?? this.qualityPick,
       episodes: episodes ?? this.episodes,
       currentEpisode: clearCurrentEpisode
           ? null
@@ -207,6 +224,8 @@ class PanelData {
         setEquals(failedSources, other.failedSources) &&
         setEquals(playedSources, other.playedSources) &&
         qualityFilteredFallback == other.qualityFilteredFallback &&
+        listEquals(qualityLadder, other.qualityLadder) &&
+        qualityPick == other.qualityPick &&
         listEquals(episodes, other.episodes) &&
         currentEpisode == other.currentEpisode &&
         _sameFiles(files, other.files) &&
@@ -224,6 +243,8 @@ class PanelData {
     Object.hashAllUnordered(failedSources),
     Object.hashAllUnordered(playedSources),
     qualityFilteredFallback,
+    Object.hashAll(qualityLadder),
+    qualityPick,
     Object.hashAll(episodes),
     currentEpisode,
     Object.hashAll(files.map((f) => Object.hash(f.index, f.name, f.sizeBytes))),
@@ -252,6 +273,7 @@ class PanelData {
       'PanelData(sources: ${sources.length}, current: $currentSourceIndex, '
       'probes: $probes, failed: $failedSources, played: $playedSources, '
       'fallback: $qualityFilteredFallback, '
+      'quality: $qualityLadder, pick: $qualityPick, '
       'episodes: ${episodes.length}, currentEpisode: ${currentEpisode?.name}, '
       'files: ${files.length}, currentFile: $currentFileIndex, '
       'subtitleTarget: $subtitleTarget)';

@@ -714,9 +714,48 @@ class Episode {
   int get hashCode => url.hashCode ^ season.hashCode ^ episode.hashCode;
 }
 
+/// A plugin's `quality`, as a height in lines: `0` is adaptive - an HLS
+/// master that offers several, which the player lists in its Quality tab.
+///
+/// Plugins write it as a number (`1080`) or a string: `"1080p"`, `"720"`,
+/// `"4K"`/`"UHD"` (2160), `"2K"` (1440), `"Auto"` (0). Anything else is
+/// ignored, and so is the number 400: CloudStream's and skystream-extractors'
+/// `Qualities.Unknown`, which a plugin passing an extractor's links on hands
+/// over as it is.
+int? parseStreamQuality(Object? value) {
+  if (value is num) {
+    if (!value.isFinite) return null;
+    final height = value.round();
+    if (height == 0) return 0;
+    if (height == _kUnknownStreamQuality) return null;
+    return _plausibleHeight(height);
+  }
+  if (value is! String) return null;
+  final text = value.trim().toLowerCase();
+  if (text == 'auto') return 0;
+  if (text == '4k' || text == 'uhd') return 2160;
+  if (text == '2k') return 1440;
+  final match = _qualityDigits.firstMatch(text);
+  return match == null ? null : _plausibleHeight(int.parse(match.group(1)!));
+}
+
+/// `Qualities.Unknown` in CloudStream and skystream-extractors.
+const int _kUnknownStreamQuality = 400;
+
+final RegExp _qualityDigits = RegExp(r'^(\d{3,4})\s*p?$');
+
+/// [height] when a picture could be that tall: 144p up to 8K.
+int? _plausibleHeight(int height) =>
+    height >= 144 && height <= 4320 ? height : null;
+
 class StreamResult {
   final String url;
   final String source;
+
+  /// The stream's height in lines, or `0` for an adaptive stream - an HLS
+  /// master offering several qualities, which the player lists in its
+  /// Quality tab. Null when the plugin gave none; see [parseStreamQuality].
+  final int? quality;
 
   /// Display name of the plugin/provider that produced this stream. It is shown
   /// in the player source list and used by cross-provider source switching.
@@ -731,6 +770,7 @@ class StreamResult {
     required this.url,
     required this.source,
     this.providerName = 'Unknown',
+    this.quality,
     this.headers,
     this.subtitles,
     this.drmKid,
@@ -745,6 +785,7 @@ class StreamResult {
     String? url,
     String? source,
     String? providerName,
+    int? quality,
     Map<String, String>? headers,
     List<SubtitleFile>? subtitles,
     String? drmKid,
@@ -755,6 +796,7 @@ class StreamResult {
       url: url ?? this.url,
       source: source ?? this.source,
       providerName: providerName ?? this.providerName,
+      quality: quality ?? this.quality,
       headers: headers ?? this.headers,
       subtitles: subtitles ?? this.subtitles,
       drmKid: drmKid ?? this.drmKid,
@@ -767,6 +809,7 @@ class StreamResult {
     'url': url,
     'source': source,
     'providerName': providerName,
+    'quality': quality,
     'headers': headers,
     'subtitles': subtitles?.map((x) => x.toJson()).toList(),
     'drmKid': drmKid,
@@ -779,6 +822,7 @@ class StreamResult {
       url: (json['url'] as String?) ?? '',
       source: (json['source'] as String?) ?? 'Unknown',
       providerName: (json['providerName'] as String?) ?? 'Unknown',
+      quality: parseStreamQuality(json['quality']),
       headers: json['headers'] != null
           ? Map<String, String>.from(json['headers'] as Map)
           : null,

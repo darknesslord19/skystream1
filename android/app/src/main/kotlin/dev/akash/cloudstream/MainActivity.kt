@@ -13,6 +13,7 @@ import io.flutter.embedding.android.TransparencyMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.util.GeneratedPluginRegister
 import io.flutter.plugin.common.MethodChannel
+import android.app.ActivityManager
 import android.app.PictureInPictureParams
 import android.os.Build
 import android.util.Rational
@@ -37,6 +38,7 @@ class MainActivity : com.lagradost.cloudstream3.MainActivity(), FlutterEngineCon
     private val TV_CHANNEL = "dev.akash.skystream/tv_channel"
     private val PLAYER_CHANNEL = "dev.akash.skystream/external_player"
     private val TEXT_INPUT_CHANNEL = "dev.akash.skystream/text_input"
+    private val MEMORY_CHANNEL = "dev.akash.skystream/device_memory"
 
     private var isPlaying = false
 
@@ -64,6 +66,26 @@ class MainActivity : com.lagradost.cloudstream3.MainActivity(), FlutterEngineCon
                 }
                 else -> result.notImplemented()
             }
+        }
+
+        // What the player sizes its read-ahead from (lib/core/providers/device_memory.dart).
+        // lowRam is the OEM's verdict, isLowRamDevice(); MemoryInfo.lowMemory only says
+        // memory is short at this moment.
+        MethodChannel(messenger, MEMORY_CHANNEL).setMethodCallHandler { call, result ->
+            if (call.method != "read") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+            val info = ActivityManager.MemoryInfo()
+            manager.getMemoryInfo(info)
+            result.success(
+                mapOf(
+                    "totalMb" to info.totalMem / 1_048_576L,
+                    "freeMb" to info.availMem / 1_048_576L,
+                    "lowRam" to manager.isLowRamDevice,
+                )
+            )
         }
 
         // PiP Channel

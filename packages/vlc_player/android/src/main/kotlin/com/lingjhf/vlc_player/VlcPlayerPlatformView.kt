@@ -6,12 +6,18 @@ import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.PixelCopy
 import android.view.Surface
+import android.view.TextureView
 import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.ImageView
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -47,8 +53,25 @@ internal class VlcPlayerPlatformView(
     private val onDispose: (Long, VlcPlayerPlatformView) -> Unit,
 ) : PlatformView {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val videoLayout: VLCVideoLayout? = (target as? VlcRenderTarget.VideoLayout)?.layout
-    private val libVLC = LibVLC(context, options)
+    private val videoLayouts = target as? VlcRenderTarget.VideoLayout
+
+    /// The layout the current player draws into. Every player gets its own
+    /// (FORK.md 29); [surfaces] decides which is on show.
+    private var videoLayout: VLCVideoLayout? = videoLayouts?.newLayout()
+
+    /// Which layout is on show, and when a replaced player's layout can go.
+    private val surfaces = VlcSurfaceHandover<MediaPlayer, VLCVideoLayout>()
+
+    /// The player whose first time report has asked for its layout to show.
+    private var pictureAskedFor: MediaPlayer? = null
+
+    /// Each player's view surfaces that its views let go of, kept until the
+    /// player has stopped (FORK.md 29).
+    private val surfaceKeepers = HashMap<MediaPlayer, VlcSurfaceKeeper<SurfaceTexture>>()
+
+    /// A test hook: see [VlcReleaseDelay].
+    private val releaseDelay = VlcReleaseDelay.from(options)
+    private val libVLC = LibVLC(context, releaseDelay.libVlcOptions)
 
     /// The libVLC player currently playing for this view.
     ///
@@ -141,6 +164,8 @@ internal class VlcPlayerPlatformView(
                 return
             }
             viewsAttached = true
+            surfacesReady = true
+            surfaceWait.surfaceReady()
             mediaPlayer.setVideoScale(videoScale)
             sendSnapshot()
         }
@@ -149,6 +174,7 @@ internal class VlcPlayerPlatformView(
             if (vlcVout !== mediaPlayer.vlcVout) {
                 return
             }
+            surfacesReady = false
             viewsAttached = false
             if (disposed || detachingViews) {
                 return
@@ -224,6 +250,34 @@ internal class VlcPlayerPlatformView(
     private var attachViewsPosted = false
     private var disposed = false
 
+    /// The decision a keepPicture reopen's hold follows; see [VlcPictureHold].
+    private val pictureHold = VlcPictureHold()
+
+    /// The copy of the last frame laid over the video, from a hold until its
+    /// view is gone, a moment after the hold ends: see [VlcHeldOverlay].
+    private val heldPicture = VlcHeldOverlay<ImageView>(
+        scheduler = object : VlcHeldOverlay.Scheduler {
+            override fun postDelayed(delayMs: Long, task: Runnable) {
+                mainHandler.postDelayed(task, delayMs)
+            }
+
+            override fun cancel(task: Runnable) {
+                mainHandler.removeCallbacks(task)
+            }
+        },
+        remove = { overlay -> (overlay.parent as? ViewGroup)?.removeView(overlay) },
+    )
+
+    /// Whether the current player's views have their surfaces: libvlc-android
+    /// starts playback only then. See [VlcSurfaceWait].
+    private var surfacesReady = false
+    private val surfaceWait = VlcSurfaceWait { SystemClock.elapsedRealtime() }
+
+    /// Plays wait here while the plugin builds libVLC's font database; see
+    /// [VlcFontWarmup.gate]. A play starting or ending its wait sends a
+    /// snapshot, whose `startGated` says so.
+    private val playRequests = VlcPlayRequests(VlcFontWarmup.gate) { sendSnapshot() }
+
     /// The surface libVLC is drawing into on the texture target, and so the
     /// one a snapshot copies from. Null whenever the vout is detached.
     private var attachedSurface: Surface? = null
@@ -233,9 +287,9 @@ internal class VlcPlayerPlatformView(
     init {
         when (target) {
             is VlcRenderTarget.VideoLayout -> {
-                target.layout.setBackgroundColor(Color.BLACK)
-                target.layout.addOnAttachStateChangeListener(attachStateListener)
-                target.layout.addOnLayoutChangeListener(layoutChangeListener)
+                target.container.addOnAttachStateChangeListener(attachStateListener)
+                target.container.addOnLayoutChangeListener(layoutChangeListener)
+                surfaces.start(mediaPlayer, videoLayout!!)
             }
             is VlcRenderTarget.Texture -> target.producer.setCallback(surfaceCallback)
         }
@@ -251,13 +305,14 @@ internal class VlcPlayerPlatformView(
         eventChannel.setStreamHandler(streamHandler)
     }
 
-    override fun getView(): View? = videoLayout
+    override fun getView(): View? = videoLayouts?.container
 
     fun setSource(
         uri: String,
         httpHeaders: Map<String, String>,
         mediaOptions: List<String>,
         startPosition: Long,
+        keepPicture: Boolean,
         autoPlay: Boolean,
         result: MethodChannel.Result,
     ) {
@@ -266,6 +321,13 @@ internal class VlcPlayerPlatformView(
         }
 
         try {
+            // Before the swap, while the view still shows the old frame.
+            val keep = keepPicture && target is VlcRenderTarget.VideoLayout
+            when (pictureHold.arm(keep, hasPicture = keep && holdPicture())) {
+                VlcPictureHold.Change.RELEASE -> releaseHeldPicture()
+                VlcPictureHold.Change.NONE -> if (!pictureHold.held) releaseHeldPicture()
+                VlcPictureHold.Change.HOLD -> Unit
+            }
             // A player that has had a source gets replaced rather than handed
             // the next one - see replacePlayer.
             if (lastSource != null) {
@@ -284,7 +346,14 @@ internal class VlcPlayerPlatformView(
             clearInterruption()
             updateState(STATE_OPENING)
             if (autoPlay && requestAudioFocusToPlay()) {
-                mediaPlayer.play()
+                val player = mediaPlayer
+                playRequests.request {
+                    if (disposed || player !== mediaPlayer) return@request
+                    surfaceWait.playAsked(
+                        surfaceReady = surfacesReady || target !is VlcRenderTarget.VideoLayout,
+                    )
+                    player.play()
+                }
             }
             result.success(null)
         } catch (error: RuntimeException) {
@@ -332,14 +401,36 @@ internal class VlcPlayerPlatformView(
     /// stuck in. The settings the host made on the player, which libVLC
     /// keeps per player and not per media, are carried across.
     private fun replacePlayer() {
+        surfacesReady = false
+        surfaceWait.reset()
         val retired = mediaPlayer
         retired.setEventListener(null)
         retired.vlcVout.removeCallback(voutCallback)
-        // Detached here, on the main thread and before anything else touches
-        // it: the views belong to this view, not to the player.
-        releaseViews()
+        if (target is VlcRenderTarget.Texture) {
+            // One Flutter surface for every player: detached here, on the main
+            // thread and before anything else touches it.
+            releaseViews()
+        } else {
+            // Its views stay until its stop has returned: its output draws into
+            // a layout of its own, which nothing else uses, and keeps a live
+            // surface for as long as it holds one (FORK.md 29). Its video track
+            // goes now, and its decoder with it; its last picture stays.
+            retired.setVideoTrack(-1)
+            // Held at its size: libvlc-android's layout listener on its views
+            // answers a resize of the container - a rotation, picture-in-
+            // picture - by calling into libVLC on this thread when the player
+            // has no picture size yet, behind the input lock its stop holds
+            // while it joins a read that hangs (FORK.md 29).
+            videoLayout?.let(::pinSize)
+            viewsAttached = false
+        }
 
         mediaPlayer = MediaPlayer(libVLC)
+        videoLayouts?.let { layouts ->
+            val layout = layouts.newLayout()
+            videoLayout = layout
+            surfaces.replace(retired, mediaPlayer, layout)
+        }
         connect(mediaPlayer)
         mediaPlayer.rate = playbackSpeed
         applyVolume()
@@ -347,9 +438,121 @@ internal class VlcPlayerPlatformView(
         applySubtitleLook()
         attachViewsIfNeeded()
 
+        // Before the stop holds the input lock (VlcSurfaceKeeper.tellsLibVlc).
+        surfaceKeepers[retired]?.playerStopping()
         releaser.execute {
+            releaseDelay.beforeStop()
             retired.stop()
-            retired.release()
+            mainHandler.post {
+                // Its output has let go of its layout: the views go now, on
+                // the main thread as libvlc-android wants.
+                retired.detachViews()
+                retired.vlcVout.detachViews()
+                surfaceKeepers.remove(retired)?.playerStopped()
+                releaser.execute {
+                    retired.release()
+                    mainHandler.post { applySurfaces(surfaces.released(retired)) }
+                }
+            }
+        }
+    }
+
+    /// Holds [layout] at the size it has, so its frame keeps its bounds through
+    /// any resize of the container and libvlc-android's layout listener on it
+    /// has nothing to answer (it acts only on bounds that moved).
+    private fun pinSize(layout: VLCVideoLayout) {
+        val width = layout.width
+        val height = layout.height
+        if (width <= 0 || height <= 0) return
+        layout.layoutParams = FrameLayout.LayoutParams(width, height)
+    }
+
+    /// Watches [layout]'s TextureView for [player]'s first picture, and keeps
+    /// its surface past the view for as long as [player] may draw into it, in
+    /// front of libvlc-android's own listener, which it hands every call on to.
+    private fun watchFirstPicture(player: MediaPlayer, layout: VLCVideoLayout) {
+        val texture = layout.findViewById<TextureView>(org.videolan.R.id.texture_video) ?: return
+        val libVlcListener = texture.surfaceTextureListener ?: return
+        if (libVlcListener is FirstPictureWatch) return
+        val keeper = surfaceKeepers.getOrPut(player) { VlcSurfaceKeeper { it.release() } }
+        texture.surfaceTextureListener = FirstPictureWatch(libVlcListener, keeper) { watch ->
+            // Called while the view draws: looked at once that is over.
+            mainHandler.post { checkFirstPicture(player, texture, watch) }
+        }
+    }
+
+    /// Brings [player]'s layout to the front at its first frame that is a
+    /// picture: an output's first frame can be its black clear (FORK.md 29).
+    private fun checkFirstPicture(player: MediaPlayer, texture: TextureView, watch: FirstPictureWatch) {
+        if (disposed || player !== mediaPlayer || surfaces.onShow === videoLayout) {
+            watch.watching = false
+            return
+        }
+        if (!texture.isAvailable) return
+        // A small copy of the frame, made on this thread: 2-112 ms on the phone
+        // emulator, up to 0.24 s on the 4K TV one. So only the first few frames
+        // are looked at; a dark opening comes forward at its time report.
+        if (watch.checks >= FIRST_PICTURE_CHECKS) {
+            watch.watching = false
+            return
+        }
+        watch.checks += 1
+        val copy = texture.getBitmap(8, 8) ?: return
+        val pixels = IntArray(64)
+        copy.getPixels(pixels, 0, 8, 0, 0, 8, 8)
+        copy.recycle()
+        if (VlcSurfaceHandover.isPicture(pixels)) {
+            watch.watching = false
+            applySurfaces(surfaces.pictureUp(player))
+        }
+    }
+
+    /// libvlc-android's TextureView listener, with the frames looked at until
+    /// the picture is up, and the surface kept when the view goes.
+    private class FirstPictureWatch(
+        private val libVlc: TextureView.SurfaceTextureListener,
+        private val keeper: VlcSurfaceKeeper<SurfaceTexture>,
+        private val onFrame: (FirstPictureWatch) -> Unit,
+    ) : TextureView.SurfaceTextureListener by libVlc {
+        var watching = true
+        var checks = 0
+
+        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+            libVlc.onSurfaceTextureUpdated(surface)
+            if (watching) onFrame(this)
+        }
+
+        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+            // libvlc-android lets go of its surfaces and asks for the video
+            // track to go, but an output can draw on until its player stops.
+            // Not while it stops: see VlcSurfaceKeeper.tellsLibVlc.
+            if (keeper.tellsLibVlc) libVlc.onSurfaceTextureDestroyed(surface)
+            return keeper.viewLetGo(surface)
+        }
+    }
+
+    /// Brings [player]'s layout to the front a moment after its first time
+    /// report, as the held copy goes, if no frame has done so: one too dark to
+    /// tell from a black clear, say.
+    private fun showPictureOf(player: MediaPlayer) {
+        if (pictureAskedFor === player) return
+        pictureAskedFor = player
+        mainHandler.postDelayed(
+            { applySurfaces(surfaces.pictureUp(player)) },
+            HELD_PICTURE_RELEASE_DELAY_MS,
+        )
+    }
+
+    /// Applies the handover's decisions to the container. Never from inside a
+    /// draw - a TextureView callback, say: a child removed while the container
+    /// draws crashes its dispatchDraw.
+    private fun applySurfaces(changes: List<VlcSurfaceHandover.Change<VLCVideoLayout>>) {
+        val container = videoLayouts?.container ?: return
+        for (change in changes) {
+            when (change) {
+                is VlcSurfaceHandover.Change.Show -> container.bringChildToFront(change.surface)
+                is VlcSurfaceHandover.Change.Remove -> container.removeView(change.surface)
+            }
         }
     }
 
@@ -399,7 +602,10 @@ internal class VlcPlayerPlatformView(
         }
         clearInterruption()
         if (requestAudioFocusToPlay()) {
-            mediaPlayer.play()
+            val player = mediaPlayer
+            playRequests.request {
+                if (!disposed && player === mediaPlayer) player.play()
+            }
         }
         result.success(null)
     }
@@ -412,6 +618,7 @@ internal class VlcPlayerPlatformView(
         // moment expects the next press of play to be instant, and handing
         // audio back only to snatch it again interrupts whatever took it.
         clearInterruption()
+        playRequests.cancel()
         mediaPlayer.pause()
         result.success(null)
     }
@@ -422,6 +629,8 @@ internal class VlcPlayerPlatformView(
         }
         audioFocus.abandon()
         clearInterruption()
+        playRequests.cancel()
+        applyHold(pictureHold.release())
         // Not mediaPlayer.stop(), which waits on the stream on this thread -
         // see replacePlayer. The source stays loaded on the fresh player, so a
         // play() after stop() starts it again, as it does on libVLC's own stop.
@@ -436,6 +645,16 @@ internal class VlcPlayerPlatformView(
             return
         }
         mediaPlayer.time = milliseconds.coerceAtLeast(0L)
+        sendSnapshot()
+        result.success(null)
+    }
+
+    /** A place in a live HLS or DASH window, as libVLC's position fraction. */
+    fun seekToFraction(fraction: Float, result: MethodChannel.Result) {
+        if (!ensureActive(result)) {
+            return
+        }
+        mediaPlayer.position = fraction
         sendSnapshot()
         result.success(null)
     }
@@ -497,7 +716,7 @@ internal class VlcPlayerPlatformView(
             dropCachedTracks()
             val track = sizedVideoTrack()
             val (viewWidth, viewHeight) = when (target) {
-                is VlcRenderTarget.VideoLayout -> target.layout.width to target.layout.height
+                is VlcRenderTarget.VideoLayout -> target.container.width to target.container.height
                 is VlcRenderTarget.Texture -> videoLayoutWidth to videoLayoutHeight
             }
             VlcSubtitleMargin.pixels(
@@ -544,7 +763,7 @@ internal class VlcPlayerPlatformView(
             return
         }
         when (target) {
-            is VlcRenderTarget.VideoLayout -> snapshotWindow(target.layout, width, height, result)
+            is VlcRenderTarget.VideoLayout -> snapshotWindow(videoLayout!!, width, height, result)
             is VlcRenderTarget.Texture -> snapshotSurface(width, height, result)
         }
     }
@@ -720,19 +939,29 @@ internal class VlcPlayerPlatformView(
             return
         }
         disposed = true
+        playRequests.cancel()
+        pictureHold.release()
+        releaseHeldPicture(now = true)
         audioFocus.dispose()
         eventChannel.setStreamHandler(null)
         mediaPlayer.setEventListener(null)
         when (target) {
             is VlcRenderTarget.VideoLayout -> {
-                target.layout.removeOnAttachStateChangeListener(attachStateListener)
-                target.layout.removeOnLayoutChangeListener(layoutChangeListener)
+                target.container.removeOnAttachStateChangeListener(attachStateListener)
+                target.container.removeOnLayoutChangeListener(layoutChangeListener)
             }
             is VlcRenderTarget.Texture -> target.producer.setCallback(null)
         }
         mediaPlayer.vlcVout.removeCallback(voutCallback)
-        // Detached here, on the main thread, where the views live.
-        releaseViews()
+        when (target) {
+            // Flutter has already taken the view away, and with it every
+            // layout's surface: libvlc-android's own listener has told each
+            // player still drawing (FORK.md 29). Their views go once each has
+            // stopped, below.
+            is VlcRenderTarget.VideoLayout -> surfaces.dispose()
+            // Detached here, on the main thread, where the views live.
+            is VlcRenderTarget.Texture -> releaseViews()
+        }
         onDispose(viewId, this)
 
         // Everything that waits on libVLC's threads happens off the main
@@ -746,9 +975,16 @@ internal class VlcPlayerPlatformView(
         // and the player, with nowhere left to draw, goes before the instance.
         val player = mediaPlayer
         val producer = (target as? VlcRenderTarget.Texture)?.producer
+        // Before the stop holds the input lock (VlcSurfaceKeeper.tellsLibVlc).
+        surfaceKeepers[player]?.playerStopping()
         releaser.execute {
+            releaseDelay.beforeStop()
             player.stop()
             mainHandler.post {
+                // Its output has let go: its views go, on the main thread.
+                player.detachViews()
+                player.vlcVout.detachViews()
+                surfaceKeepers.remove(player)?.playerStopped()
                 // Texture registry calls belong on the platform thread.
                 producer?.release()
                 releaser.execute {
@@ -759,6 +995,62 @@ internal class VlcPlayerPlatformView(
         }
     }
 
+    /// Lays a copy of the frame on screen over the video, which libVLC draws
+    /// into directly. False, holding nothing, when there is no frame to copy.
+    private fun holdPicture(): Boolean {
+        // A copy still over the video - held, or let go less than its delay
+        // ago - is the one to keep: the view under it may already show the
+        // newer media's picture at 0. Its removal, if one was coming, is off.
+        if (heldPicture.reuse() != null) return true
+        // The picture on show: the newest layout that has had one.
+        val layout = surfaces.onShow ?: return false
+        val container = videoLayouts?.container ?: return false
+        val texture =
+            layout.findViewById<TextureView>(org.videolan.R.id.texture_video) ?: return false
+        if (!texture.isAvailable || texture.width == 0 || texture.height == 0) return false
+        // At most 1920 wide: the copy shows for seconds, and a 4K one is 33 MB.
+        val scale = minOf(1f, 1920f / texture.width)
+        val bitmap = texture.getBitmap(
+            (texture.width * scale).toInt(),
+            (texture.height * scale).toInt(),
+        ) ?: return false
+        // The texture is centred in its layout, which fills the container:
+        // its own parameters place the copy over it there.
+        val params = (texture.layoutParams as? FrameLayout.LayoutParams)
+            ?.let { FrameLayout.LayoutParams(it) }
+            ?: FrameLayout.LayoutParams(texture.layoutParams)
+        val overlay = ImageView(context).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.FIT_XY
+            // Over every layout, whichever is brought to the front.
+            translationZ = HELD_PICTURE_Z
+        }
+        container.addView(overlay, params)
+        heldPicture.hold(overlay)
+        return true
+    }
+
+    /// Takes the copy away once the new player's first frame at its start has
+    /// had a moment to reach the view: libVLC's first time report can come a
+    /// frame before it. [now] for a teardown, which takes a copy already let
+    /// go as well. Whether a hold is on is [pictureHold]'s, so the snapshot
+    /// this sends already says it ended.
+    private fun releaseHeldPicture(now: Boolean = false) {
+        if (now) {
+            if (!heldPicture.isUp) return
+            heldPicture.releaseNow()
+        } else {
+            // A copy already let go is on its way out, and was said to be.
+            if (!heldPicture.isHeld) return
+            heldPicture.release(HELD_PICTURE_RELEASE_DELAY_MS)
+        }
+        sendSnapshot()
+    }
+
+    private fun applyHold(change: VlcPictureHold.Change) {
+        if (change == VlcPictureHold.Change.RELEASE) releaseHeldPicture()
+    }
+
     private fun handlePlayerEvent(event: MediaPlayer.Event) {
         if (disposed) {
             return
@@ -767,6 +1059,7 @@ internal class VlcPlayerPlatformView(
         when (event.type) {
             MediaPlayer.Event.Opening -> {
                 bufferingProgress = null
+                pictureHold.onOpening()
                 updateState(STATE_OPENING)
             }
             MediaPlayer.Event.Buffering -> {
@@ -786,6 +1079,10 @@ internal class VlcPlayerPlatformView(
                 // with a spinner over a frame the viewer asked to hold.
                 if (mediaPlayer.isPlaying) {
                     updateState(if (percent < 100.0f) STATE_BUFFERING else STATE_PLAYING)
+                } else {
+                    // The first fill, before libVLC plays: Dart keeps the
+                    // percentage while the media opens (spec 4).
+                    sendSnapshot()
                 }
             }
             MediaPlayer.Event.Playing -> {
@@ -798,6 +1095,7 @@ internal class VlcPlayerPlatformView(
             }
             MediaPlayer.Event.Stopped -> {
                 bufferingProgress = null
+                applyHold(pictureHold.onMediaGone())
                 // Focus is deliberately not abandoned here. Replacing the media
                 // on a running player emits Stopped, and this event arrives a
                 // main-thread hop later - after setSource has already taken
@@ -807,6 +1105,7 @@ internal class VlcPlayerPlatformView(
             }
             MediaPlayer.Event.EndReached -> {
                 bufferingProgress = null
+                applyHold(pictureHold.onMediaGone())
                 // Nothing left to play: hold audio no longer, so whatever was
                 // ducked or paused behind us can come back on its own. A
                 // playlist advancing takes it straight back.
@@ -815,6 +1114,7 @@ internal class VlcPlayerPlatformView(
             }
             MediaPlayer.Event.EncounteredError -> {
                 bufferingProgress = null
+                applyHold(pictureHold.onMediaGone())
                 errorCode = ERROR_PLAYBACK
                 errorDescription = "VLC encountered an error while playing the media."
                 updateState(STATE_ERROR)
@@ -825,8 +1125,19 @@ internal class VlcPlayerPlatformView(
                 reapplySubtitleLook()
                 sendSnapshot()
             }
-            MediaPlayer.Event.TimeChanged,
-            MediaPlayer.Event.PositionChanged,
+            MediaPlayer.Event.TimeChanged -> {
+                applyHold(pictureHold.onTimeChanged())
+                showPictureOf(mediaPlayer)
+                sendSnapshot()
+            }
+            MediaPlayer.Event.PositionChanged -> {
+                // libVLC sends a new time as PositionChanged, then TimeChanged
+                // (lib/media_player.c, INPUT_EVENT_POSITION): the first is the
+                // time report that ends a hold, so the snapshot of the first
+                // move already says so, at the new picture's size (FORK.md 30).
+                applyHold(pictureHold.onTimeChanged())
+                sendSnapshot()
+            }
             MediaPlayer.Event.LengthChanged,
             MediaPlayer.Event.SeekableChanged,
             MediaPlayer.Event.ESSelected,
@@ -971,12 +1282,14 @@ internal class VlcPlayerPlatformView(
         }
         when (target) {
             is VlcRenderTarget.VideoLayout -> {
-                if (!target.layout.isAttachedToWindow) {
+                val layout = videoLayout ?: return
+                if (!layout.isAttachedToWindow) {
                     return
                 }
                 releaseViews()
-                mediaPlayer.attachViews(target.layout, null, false, true)
+                mediaPlayer.attachViews(layout, null, false, true)
                 mediaPlayer.setVideoScale(videoScale)
+                watchFirstPicture(mediaPlayer, layout)
             }
             is VlcRenderTarget.Texture -> {
                 val surface = target.producer.surface
@@ -1091,6 +1404,7 @@ internal class VlcPlayerPlatformView(
         event["state"] = state
         event["position"] = mediaPlayer.time.coerceAtLeast(0L)
         event["duration"] = duration
+        event["positionFraction"] = mediaPlayer.position.toDouble()
         event["volume"] = volume
         event["playbackSpeed"] = playbackSpeed.toDouble()
         event["audioDelay"] = mediaPlayer.audioDelay
@@ -1104,6 +1418,12 @@ internal class VlcPlayerPlatformView(
         event["isLive"] = isLiveState(state) && duration == 0L && !isSeekable
         event["interruption"] = interruption
         putVideoShape(event)
+        // The decision, the same on every backend (FORK.md 30); the overlay
+        // outlives a hold by its removal's delay.
+        event["pictureHeld"] = pictureHold.held
+        // A play waiting at the font start gate (FORK.md 26 and 33).
+        event["startGated"] = playRequests.waiting
+        surfaceWait.waitedMs?.let { event["videoSurfaceWaitMs"] = it }
         bufferingProgress?.let {
             event["bufferingProgress"] = it
         }
@@ -1224,6 +1544,18 @@ internal class VlcPlayerPlatformView(
     }
 
     private companion object {
+        /// How long the copy laid over the video outlives the new player's
+        /// first time report, so its first frame at the start is drawn first.
+        const val HELD_PICTURE_RELEASE_DELAY_MS = 120L
+
+        /// The held copy's elevation in the container: above every player's
+        /// layout, whichever the handover brings to the front.
+        const val HELD_PICTURE_Z = 1f
+
+        /// How many of a new player's first frames are looked at for its first
+        /// picture: the black clear, the picture, and one to spare.
+        const val FIRST_PICTURE_CHECKS = 3
+
         /**
          * Where libVLC players are stopped and released: never the main
          * thread, see [replacePlayer]. A thread per job rather than a single

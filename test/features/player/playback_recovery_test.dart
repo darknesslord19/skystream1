@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:clock/clock.dart';
+import 'package:vlc_player/vlc_player.dart'
+    show VlcAudioInterruption, VlcMediaStats, VlcPlaybackState;
 import 'package:skystream/core/providers/device_info_provider.dart';
 import 'package:skystream/features/player/domain/playback_recovery.dart';
 import 'package:skystream/features/player/domain/stream_resolver.dart'
@@ -553,6 +556,496 @@ void main() {
     test('the floor has nothing below it', () {
       expect(stepDownFrom(720), isNull);
       expect(stepDownFrom(480), isNull);
+    });
+  });
+
+  group('renditionCapFor', () {
+    test('Auto is the device rung under no preference', () {
+      expect(renditionCapFor(deviceCap: 1080), 1080);
+    });
+
+    test('Auto is the preference where it is below the device', () {
+      expect(renditionCapFor(deviceCap: 2160, preferenceHeight: 1080), 1080);
+      expect(renditionCapFor(deviceCap: 1080, preferenceHeight: 480), 480);
+    });
+
+    test('a preference above the device does not raise Auto', () {
+      expect(renditionCapFor(deviceCap: 1080, preferenceHeight: 2160), 1080);
+    });
+
+    test('a pick is taken as it is, above the device too', () {
+      expect(
+        renditionCapFor(deviceCap: 1080, pick: 2160, preferenceHeight: 720),
+        2160,
+      );
+      expect(
+        renditionCapFor(deviceCap: 1080, pick: 360, preferenceHeight: 1080),
+        360,
+      );
+    });
+  });
+
+  group('the software retry', () {
+    test('is for Android with hardware decoding on, and only once', () {
+      bool retry(
+        TargetPlatform platform, {
+        bool hw = true,
+        bool done = false,
+      }) => shouldRetryInSoftware(
+        platform: platform,
+        hardwareDecoding: hw,
+        alreadySoftware: done,
+        lostInWindow: 0,
+      );
+      expect(retry(TargetPlatform.android), isTrue);
+      expect(retry(TargetPlatform.android, done: true), isFalse);
+      expect(retry(TargetPlatform.android, hw: false), isFalse);
+      for (final platform in [
+        TargetPlatform.iOS,
+        TargetPlatform.macOS,
+        TargetPlatform.windows,
+        TargetPlatform.linux,
+      ]) {
+        expect(retry(platform), isFalse, reason: '$platform');
+      }
+    });
+
+    // The Android TV emulator, P1 Part 1's matrix: "pictures are decoded but
+    // never shown" (displayed 0, lost 8) after a live reopen. The decoder made
+    // those pictures and the video output dropped them, the surface stall the
+    // spec gives Part 2. Software decoding brings no picture back, and holds
+    // the rest of the viewing to the CPU's lower rendition.
+    test('is not for pictures the output dropped: the decoder made them', () {
+      expect(
+        shouldRetryInSoftware(
+          platform: TargetPlatform.android,
+          hardwareDecoding: true,
+          alreadySoftware: false,
+          lostInWindow: 8,
+        ),
+        isFalse,
+      );
+    });
+
+    test('caps the rendition where a CPU keeps up, and never raises it', () {
+      expect(
+        softwareRetryCap(
+          tier: DeviceTier.high,
+          panelHeightPx: 2160,
+          currentCap: 2160,
+        ),
+        1080,
+      );
+      expect(
+        softwareRetryCap(
+          tier: DeviceTier.low,
+          panelHeightPx: 1080,
+          currentCap: 1080,
+        ),
+        720,
+      );
+      expect(
+        softwareRetryCap(
+          tier: DeviceTier.standard,
+          panelHeightPx: 1080,
+          currentCap: 720,
+        ),
+        720,
+      );
+    });
+  });
+
+  group('the watchdog\'s clock (spec 2: wall-clock time)', () {
+    late DateTime now;
+    late StallClock stall;
+
+    void timed(String description, void Function() body) {
+      test(description, () {
+        now = DateTime.utc(2026, 10, 15, 20);
+        withClock(Clock(() => now), () {
+          stall = StallClock();
+          body();
+        });
+      });
+    }
+
+    timed('a jump of 60 s counts as 60 s', () {
+      stall.tick(const Duration(seconds: 12));
+      now = now.add(const Duration(seconds: 60));
+
+      expect(stall.tick(const Duration(seconds: 12)), isFalse);
+      expect(stall.stalledFor, const Duration(seconds: 60));
+    });
+
+    timed('a clock that goes back adds nothing', () {
+      stall.tick(const Duration(seconds: 12));
+      now = now.subtract(const Duration(seconds: 30));
+
+      stall.tick(const Duration(seconds: 12));
+      expect(stall.stalledFor, Duration.zero);
+    });
+
+    timed('a clock jump while the position moves counts nothing', () {
+      stall.tick(const Duration(seconds: 12));
+      now = now.add(const Duration(seconds: 30));
+
+      expect(stall.tick(const Duration(seconds: 13)), isTrue);
+      expect(stall.stalledFor, Duration.zero);
+    });
+
+    timed('a restart counts from itself: ten minutes paused is no stall', () {
+      stall.tick(const Duration(seconds: 12));
+      // Paused: the watchdog restarts the count on every tick, the last one
+      // just before play resumes.
+      now = now.add(const Duration(minutes: 10));
+      stall.restart();
+      now = now.add(const Duration(milliseconds: 600));
+
+      stall.tick(const Duration(seconds: 12));
+      expect(stall.stalledFor, const Duration(milliseconds: 600));
+    });
+
+    timed('a stall adds up tick by tick, and a move starts it again', () {
+      stall.tick(const Duration(seconds: 12));
+      for (var i = 0; i < 9; i++) {
+        now = now.add(const Duration(seconds: 1));
+        stall.tick(const Duration(seconds: 12));
+      }
+      expect(stall.stalledFor, const Duration(seconds: 9));
+
+      now = now.add(const Duration(seconds: 1));
+      stall.tick(const Duration(seconds: 13));
+      expect(stall.stalledFor, Duration.zero);
+    });
+
+    test(
+      'a frozen picture noticed 60 s late recovers at once, past the nudge',
+      () {
+        expect(
+          stallActionFor(
+            stalledFor: const Duration(seconds: 60),
+            hadFrames: true,
+            lastAction: StallAction.none,
+          ),
+          StallAction.recover,
+        );
+      },
+    );
+  });
+
+  group('HLS and DASH stalls', () {
+    StallAction adaptive(int seconds, {bool afterSeek = false}) =>
+        stallActionFor(
+          stalledFor: Duration(seconds: seconds),
+          hadFrames: true,
+          lastAction: StallAction.none,
+          afterSeek: afterSeek,
+          adaptive: true,
+        );
+
+    test('get no nudge, and reach recovery at 25 s, or 40 s after a seek', () {
+      expect(adaptive(10), StallAction.none);
+      expect(adaptive(24), StallAction.none);
+      expect(adaptive(25), StallAction.recover);
+      expect(adaptive(25, afterSeek: true), StallAction.none);
+      expect(adaptive(40, afterSeek: true), StallAction.recover);
+    });
+
+    test('bytes still arriving are the demuxer\'s for HLS and DASH, and the '
+        'access\'s for files', () {
+      const stats = VlcMediaStats(
+        isAvailable: true,
+        readBytes: 1200,
+        demuxReadBytes: 8000000,
+      );
+
+      expect(arrivalBytesOf(stats, adaptive: true), 8000000);
+      expect(arrivalBytesOf(stats, adaptive: false), 1200);
+    });
+  });
+
+  group('a starved video', () {
+    late StarvedVideoWatch watch;
+    setUp(() => watch = StarvedVideoWatch());
+
+    Duration? at(
+      int seconds,
+      int decoded, {
+      bool running = true,
+      Duration? remaining,
+    }) => watch.sample(
+      decodedVideo: decoded,
+      position: Duration(seconds: seconds),
+      running: running,
+      remaining: remaining,
+    );
+
+    test('the clock running 3 s with no new picture is starved, at the last '
+        'picture', () {
+      expect(at(8, 192), isNull);
+      expect(at(9, 216), isNull);
+      expect(at(10, 240), isNull);
+      expect(at(11, 240), isNull);
+      expect(at(12, 240), isNull);
+      expect(at(13, 240), const Duration(seconds: 10));
+    });
+
+    test('new pictures keep it fed', () {
+      for (var s = 10; s < 30; s++) {
+        expect(at(s, 240 + (s - 10) * 24), isNull);
+      }
+    });
+
+    test('a slideshow is never starved: a new picture every 5 s', () {
+      for (var s = 10; s < 40; s++) {
+        expect(at(s, 100 + (s - 10) ~/ 5), isNull, reason: '$s s');
+      }
+    });
+
+    test('a backend whose counter never moves is never starved', () {
+      for (var s = 10; s < 30; s++) {
+        expect(at(s, 0), isNull);
+      }
+    });
+
+    test('a paused player is never starved', () {
+      at(9, 216);
+      at(10, 240);
+      for (var s = 11; s < 20; s++) {
+        expect(at(s, 240, running: false), isNull);
+      }
+    });
+
+    test('the last 5 s are never starved', () {
+      at(9, 216, remaining: const Duration(seconds: 9));
+      at(10, 240, remaining: const Duration(seconds: 8));
+      for (var s = 11; s < 20; s++) {
+        expect(
+          at(s, 240, remaining: Duration(seconds: 18 - s)),
+          isNull,
+          reason: '$s s',
+        );
+      }
+    });
+
+    test(
+      'the trickle of a starving video\'s last pictures is no slideshow',
+      () {
+        // macOS, hostdown-2src (P1 Part 3): 50 pictures a second of playback,
+        // then the last 2 over a second of sound, then none. Read across that
+        // last gap alone, the rate was 1.95 a second, under the slideshow
+        // floor, and the frozen picture was never noticed.
+        Duration? ms(int position, int decoded) => watch.sample(
+          decodedVideo: decoded,
+          position: Duration(milliseconds: position),
+          running: true,
+        );
+        for (final (position, decoded) in const [
+          (18760, 949),
+          (19735, 1001),
+          (20768, 1041),
+          (21768, 1091),
+          (22759, 1143),
+          (23785, 1145),
+          (24731, 1145),
+          (25736, 1145),
+          (26757, 1145),
+        ]) {
+          expect(ms(position, decoded), isNull, reason: '$position');
+        }
+        expect(ms(27734, 1145), const Duration(milliseconds: 23785));
+      },
+    );
+
+    test('a seek starts the count again from where it landed', () {
+      at(9, 216);
+      at(10, 240);
+      expect(at(70, 240), isNull);
+      expect(at(71, 240), isNull);
+      expect(at(72, 240), isNull);
+      expect(at(73, 240), const Duration(seconds: 70));
+    });
+  });
+
+  group('the end', () {
+    test('an end more than 2 s before the length is a false end; at the '
+        'length it is the end; with no length it is a false end', () {
+      const length = Duration(minutes: 10);
+
+      expect(
+        isFalseEnd(position: const Duration(minutes: 9), duration: length),
+        isTrue,
+      );
+      expect(
+        isFalseEnd(
+          position: length - const Duration(milliseconds: 1500),
+          duration: length,
+        ),
+        isFalse,
+      );
+      expect(
+        isFalseEnd(
+          position: const Duration(minutes: 9),
+          duration: Duration.zero,
+        ),
+        isTrue,
+      );
+    });
+  });
+
+  group('a pause or stop nobody asked for (spec 2)', () {
+    bool unasked({
+      VlcPlaybackState state = VlcPlaybackState.paused,
+      int requests = 3,
+      int whenRunning = 3,
+      VlcAudioInterruption interruption = VlcAudioInterruption.none,
+      bool foreground = true,
+    }) => isUnaskedStop(
+      state: state,
+      pauseRequests: requests,
+      pauseRequestsWhenRunning: whenRunning,
+      interruption: interruption,
+      foreground: foreground,
+    );
+
+    test('a pause nobody asked for is a failure', () {
+      expect(unasked(), isTrue);
+    });
+
+    test('a pause the viewer, the background policy or the app asked for is '
+        'not', () {
+      expect(unasked(requests: 4), isFalse);
+    });
+
+    test('a pause during an audio interruption is not', () {
+      expect(
+        unasked(interruption: VlcAudioInterruption.focusLostTransient),
+        isFalse,
+      );
+      expect(unasked(interruption: VlcAudioInterruption.focusLost), isFalse);
+    });
+
+    test('a pause with the app away is not', () {
+      expect(unasked(foreground: false), isFalse);
+    });
+
+    test('a stop the app made is not; a stop nobody asked for is', () {
+      expect(unasked(state: VlcPlaybackState.stopped, requests: 4), isFalse);
+      expect(unasked(state: VlcPlaybackState.stopped), isTrue);
+    });
+
+    test('playing, buffering or ended is never one', () {
+      for (final state in [
+        VlcPlaybackState.playing,
+        VlcPlaybackState.buffering,
+        VlcPlaybackState.ended,
+      ]) {
+        expect(unasked(state: state), isFalse, reason: state.name);
+      }
+    });
+  });
+
+  group('the first frame', () {
+    late DateTime now;
+
+    void timed(String description, void Function() body) {
+      test(description, () {
+        now = DateTime.utc(2026, 10, 15, 20);
+        withClock(Clock(() => now), body);
+      });
+    }
+
+    void pass(int seconds) => now = now.add(Duration(seconds: seconds));
+
+    timed('no progress for 30 s gives up', () {
+      final watch = FirstFrameWatch()
+        ..sample(const OpeningSample(state: VlcPlaybackState.opening));
+      pass(29);
+      // The same reading again: nothing moved.
+      expect(
+        watch.sample(const OpeningSample(state: VlcPlaybackState.opening)),
+        isFalse,
+      );
+      expect(watch.verdict, FirstFrameVerdict.wait);
+      pass(1);
+      expect(watch.verdict, FirstFrameVerdict.giveUp);
+    });
+
+    timed('progress restarts the 30 s: the prebuffer, bytes read or demuxed, '
+        'pictures or audio decoded, the state, Android\'s start gate', () {
+      for (final progress in const [
+        OpeningSample(state: VlcPlaybackState.buffering),
+        OpeningSample(prebuffer: 0.2),
+        OpeningSample(readBytes: 4096),
+        OpeningSample(demuxReadBytes: 4096),
+        OpeningSample(decodedVideo: 1),
+        OpeningSample(decodedAudio: 1),
+        OpeningSample(startGated: true),
+      ]) {
+        final watch = FirstFrameWatch();
+        pass(25);
+        expect(watch.sample(progress), isTrue, reason: '$progress');
+        pass(25);
+        expect(watch.verdict, FirstFrameVerdict.wait, reason: '$progress');
+        pass(5);
+        expect(watch.verdict, FirstFrameVerdict.giveUp, reason: '$progress');
+      }
+    });
+
+    timed('the same reading again is no progress', () {
+      final watch = FirstFrameWatch();
+      expect(watch.sample(const OpeningSample(readBytes: 4096)), isTrue);
+      expect(watch.sample(const OpeningSample(readBytes: 4096)), isFalse);
+    });
+
+    timed('a start still progressing gives up at 60 s', () {
+      final watch = FirstFrameWatch();
+      for (var s = 1; s <= 59; s++) {
+        pass(1);
+        watch.sample(OpeningSample(readBytes: s * 1000));
+      }
+      expect(watch.verdict, FirstFrameVerdict.wait);
+      pass(1);
+      watch.sample(const OpeningSample(readBytes: 999999));
+      expect(watch.verdict, FirstFrameVerdict.giveUp);
+    });
+
+    timed("the 60 s cap counts from the start gate's opening", () {
+      // Android's gate holds the first video's play while libVLC builds its
+      // font database (FORK.md 26), up to 60 s on a slow device: counted, the
+      // cap gave a healthy source up as soon as it could start (P1 Part 3
+      // review, finding 8).
+      final watch = FirstFrameWatch();
+      for (var s = 1; s <= 50; s++) {
+        pass(1);
+        watch.sample(const OpeningSample(startGated: true));
+      }
+      for (var s = 1; s <= 20; s++) {
+        pass(1);
+        watch.sample(OpeningSample(readBytes: s * 1000));
+      }
+      expect(watch.verdict, FirstFrameVerdict.wait, reason: '20 s since it');
+      for (var s = 21; s <= 60; s++) {
+        pass(1);
+        watch.sample(OpeningSample(readBytes: s * 1000));
+      }
+      expect(watch.verdict, FirstFrameVerdict.giveUp, reason: '60 s since it');
+    });
+
+    timed('torrents keep 3 minutes from the open', () {
+      final watch = FirstFrameWatch(torrent: true);
+      pass(179);
+      expect(watch.verdict, FirstFrameVerdict.wait);
+      pass(1);
+      expect(watch.verdict, FirstFrameVerdict.giveUp);
+    });
+
+    timed('a restart counts from now', () {
+      final watch = FirstFrameWatch();
+      pass(29);
+      watch.restart();
+      pass(29);
+      expect(watch.verdict, FirstFrameVerdict.wait);
     });
   });
 }

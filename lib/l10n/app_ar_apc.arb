@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "مفتاح API (تجاوز اختياري)",
   "enterKeyToOverrideDefault": "أدخل المفتاح لتجاوز الافتراضي",
   "getApiKeyFromProfile": "احصل على مفتاح API الخاص بك من ملف SubSource الشخصي",
-  "qualityNotGuaranteed": "الجودة غير مضمونة. يتم فرز المصادر حسب التفضيل، ولكن التشغيل يعتمد على ما يقدمه المزود بالفعل.",
+  "qualityNotGuaranteed": "الجودة مش مضمونة. المصادر بتترتب حسب هالتفضيل، والبث اللي فيه كذا جودة بيشتغل عليها أو على أقرب جودة أقل منها. التشغيل بيعتمد على شو بيقدّم المزوّد فعلاً.",
   "keepSourcesOriginalOrder": "الحفاظ على المصادر في ترتيبها الأصلي",
   "openLink": "فتح الرابط",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "الممثلين: {names}",
   "actorRoleMain": "رئيسي",
   "actorRoleSupporting": "ثانوي",
-  "actorRoleBackground": "هامشي"
+  "actorRoleBackground": "هامشي",
+  "playerQuality": "الجودة",
+  "playerQualityAuto": "تلقائي",
+  "playerQualityAutoPlaying": "تلقائي · {height}",
+  "networkBufferAuto": "تلقائي (منصوح فيه)",
+  "networkBufferAutoHint": "بيتحدد لكل فيديو حسب معدل البت وذاكرة هالجهاز.",
+  "devQoeLog": "سجل QoE",
+  "devQoeLogSubtitle": "بيكتب توقيتات التشغيل بسجل التطبيق",
+  "playerGoLive": "روح عالبث المباشر",
+  "playerBehindLive": "متأخر {time} عن البث المباشر"
 }

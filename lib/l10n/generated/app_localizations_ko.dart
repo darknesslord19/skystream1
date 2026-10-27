@@ -1353,7 +1353,7 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      '화질은 보장되지 않습니다. 소스는 기본 설정에 따라 정렬되지만 재생은 공급자에 따라 달라집니다.';
+      '화질은 보장되지 않습니다. 소스는 이 설정에 따라 정렬되며, 여러 화질을 제공하는 스트림은 이 화질 또는 그보다 낮은 가장 가까운 화질로 재생됩니다. 재생은 공급자가 실제로 제공하는 내용에 따라 달라집니다.';
 
   @override
   String get keepSourcesOriginalOrder => '소스의 원래 순서 유지';
@@ -1481,6 +1481,16 @@ class AppLocalizationsKo extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1525,6 +1535,9 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2356,4 +2369,35 @@ class AppLocalizationsKo extends AppLocalizations {
 
   @override
   String get actorRoleBackground => '단역';
+
+  @override
+  String get playerQuality => '화질';
+
+  @override
+  String get playerQualityAuto => '자동';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return '자동 · $height';
+  }
+
+  @override
+  String get networkBufferAuto => '자동(권장)';
+
+  @override
+  String get networkBufferAutoHint => '동영상마다 비트레이트와 이 기기의 메모리에 맞춰 크기를 정합니다.';
+
+  @override
+  String get devQoeLog => 'QoE 로그';
+
+  @override
+  String get devQoeLogSubtitle => '재생 시간 정보를 앱 로그에 기록합니다';
+
+  @override
+  String get playerGoLive => '실시간으로 이동';
+
+  @override
+  String playerBehindLive(String time) {
+    return '실시간보다 $time 늦음';
+  }
 }

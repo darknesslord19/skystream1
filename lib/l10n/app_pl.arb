@@ -571,7 +571,7 @@
   "apiKeyOptionalOverride": "API Key (Optional Override)",
   "enterKeyToOverrideDefault": "Enter key to override default",
   "getApiKeyFromProfile": "Get your API Key from SubSource Profile",
-  "qualityNotGuaranteed": "Quality is not guaranteed. Sources are sorted by preference, but playback depends on what the provider actually offers.",
+  "qualityNotGuaranteed": "Jakość nie jest gwarantowana. Źródła są sortowane według tego ustawienia, a strumień z kilkoma jakościami gra w niej lub w najbliższej niższej. Odtwarzanie zależy od tego, co dostawca faktycznie oferuje.",
   "keepSourcesOriginalOrder": "Keep sources in original order",
   "openLink": "Open link",
   "@loggedInAs": {
@@ -634,5 +634,14 @@
   "castLine": "Obsada: {names}",
   "actorRoleMain": "Główna",
   "actorRoleSupporting": "Drugoplanowa",
-  "actorRoleBackground": "Epizodyczna"
+  "actorRoleBackground": "Epizodyczna",
+  "playerQuality": "Jakość",
+  "playerQualityAuto": "Automatycznie",
+  "playerQualityAutoPlaying": "Automatycznie · {height}",
+  "networkBufferAuto": "Automatycznie (zalecane)",
+  "networkBufferAutoHint": "Rozmiar dobierany do każdego filmu według jego przepływności i pamięci tego urządzenia.",
+  "devQoeLog": "Dziennik QoE",
+  "devQoeLogSubtitle": "Zapisuje czasy odtwarzania w dzienniku aplikacji",
+  "playerGoLive": "Przejdź na żywo",
+  "playerBehindLive": "{time} za transmisją na żywo"
 }

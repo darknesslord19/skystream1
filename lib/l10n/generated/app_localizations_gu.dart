@@ -1387,7 +1387,7 @@ class AppLocalizationsGu extends AppLocalizations {
 
   @override
   String get qualityNotGuaranteed =>
-      'ગુણવત્તાની ગેરંટી નથી. સ્રોતો પસંદગી મુજબ ગોઠવવામાં આવે છે, પરંતુ પ્લેબેક પ્રદાતાની ઉપલબ્ધતા પર આધાર રાખે છે.';
+      'ગુણવત્તાની ગેરંટી નથી. સ્રોતો આ પસંદગી મુજબ ગોઠવાય છે, અને જે સ્ટ્રીમમાં ઘણી ગુણવત્તાઓ હોય તે આ ગુણવત્તામાં અથવા તેનાથી નીચેની સૌથી નજીકની ગુણવત્તામાં ચાલે છે. પ્લેબેક પ્રદાતા ખરેખર શું આપે છે તેના પર આધાર રાખે છે.';
 
   @override
   String get keepSourcesOriginalOrder => 'સ્રોતોને મૂળ ક્રમમાં રાખો';
@@ -1515,6 +1515,16 @@ class AppLocalizationsGu extends AppLocalizations {
   String get playerPreparingTorrent => 'Preparing torrent…';
 
   @override
+  String playerTorrentPeers(
+    int connected,
+    int total,
+    String speed,
+    String loaded,
+  ) {
+    return '$connected/$total peers · $speed · $loaded loaded';
+  }
+
+  @override
   String get playerReasonTorrentNotPrepared => 'torrent could not be prepared';
 
   @override
@@ -1559,6 +1569,9 @@ class AppLocalizationsGu extends AppLocalizations {
 
   @override
   String get playerReconnecting => 'Reconnecting…';
+
+  @override
+  String get playerWaitingForNetwork => 'Waiting for network…';
 
   @override
   String get playerSpeedNormal => 'Normal';
@@ -2391,4 +2404,36 @@ class AppLocalizationsGu extends AppLocalizations {
 
   @override
   String get actorRoleBackground => 'ગૌણ';
+
+  @override
+  String get playerQuality => 'ગુણવત્તા';
+
+  @override
+  String get playerQualityAuto => 'ઑટો';
+
+  @override
+  String playerQualityAutoPlaying(String height) {
+    return 'ઑટો · $height';
+  }
+
+  @override
+  String get networkBufferAuto => 'ઑટો (ભલામણ કરેલ)';
+
+  @override
+  String get networkBufferAutoHint =>
+      'દરેક વિડિયો માટે તેના બિટરેટ અને આ ડિવાઇસની મેમરી મુજબ કદ નક્કી થાય છે.';
+
+  @override
+  String get devQoeLog => 'QoE લૉગ';
+
+  @override
+  String get devQoeLogSubtitle => 'પ્લેબૅકના સમય ઍપના લૉગમાં લખે છે';
+
+  @override
+  String get playerGoLive => 'લાઇવ પર જાઓ';
+
+  @override
+  String playerBehindLive(String time) {
+    return 'લાઇવથી $time પાછળ';
+  }
 }

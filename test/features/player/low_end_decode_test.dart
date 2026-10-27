@@ -233,8 +233,9 @@ void main() {
     );
 
     // The same mistake from the other side. VideoToolbox is a decoder module
-    // in its own right, so `--avcodec-hw=none` does not move Darwin onto the
-    // CPU - it only ever cost the viewer rungs of picture.
+    // in its own right, so the switch has nothing to send Darwin: neither
+    // `--avcodec-hw` nor `:codec` reaches it, and turning it off costs no
+    // rung of picture.
     testWidgets(
       'turning the switch off does not cost a Darwin device its rung',
       variant: _hardwareDecodePlatform,
@@ -253,11 +254,12 @@ void main() {
 
         expect(createdOptions(), contains('--adaptive-maxheight=2160'));
         expect(
-          createdOptions(),
-          contains('--avcodec-hw=none'),
-          reason:
-              'the preference still owns the option it can reach; it is only '
-              'the ceiling that is the platform\'s question',
+          [
+            ...createdOptions(),
+            ...lastMediaOptions(),
+          ].where((o) => o.contains('avcodec-hw') || o.startsWith(':codec=')),
+          isEmpty,
+          reason: 'the switch reaches only Android\'s decoder, per media',
         );
 
         await tester.pumpWidget(const SizedBox());
@@ -328,6 +330,9 @@ void main() {
           ),
           panelPhysicalSize: uhdPanel,
           panelDevicePixelRatio: uhdDensity,
+          // Any: the preference asks for nothing, so the device's top rung
+          // is what the step-down starts from.
+          settings: const PlayerSettings(wifiQuality: QualityPreference.any),
         );
         expect(createdOptions(), contains('--adaptive-maxheight=2160'));
 
@@ -347,6 +352,109 @@ void main() {
           reason:
               'the ceiling is fixed on the engine instance, so a step down has '
               'to ride on the media that is reopened',
+        );
+
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    // `:adaptive-maxheight` means nothing to a progressive file: a reopen
+    // would buy nothing and cost a rebuffer (plan note 11).
+    testWidgets(
+      'a file that cannot keep up is never reopened a rung lower',
+      variant: _hardwareDecodePlatform,
+      (tester) async {
+        await pumpPlayer(
+          tester,
+          preloadedStreams: const <StreamResult>[
+            StreamResult(
+              url: '/sources/film.mp4',
+              source: '4K',
+              providerName: 'A',
+            ),
+          ],
+          profile: const DeviceProfile(
+            isTv: true,
+            physicalRamMb: 8192,
+            tier: DeviceTier.high,
+          ),
+          panelPhysicalSize: uhdPanel,
+          panelDevicePixelRatio: uhdDensity,
+          settings: const PlayerSettings(wifiQuality: QualityPreference.any),
+        );
+        final opensBefore = engine.callsTo('setSource').length;
+        var displayed = 0, lost = 0;
+        for (var i = 0; i < 12; i++) {
+          displayed += 2;
+          lost += 22;
+          engine.decodedPictures(displayed: displayed, lost: lost);
+          await playSeconds(tester, 1);
+        }
+        await settle(tester);
+
+        expect(engine.callsTo('setSource').length, opensBefore);
+
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    // The quality preference caps HLS too (2026-10-12): Auto is the smaller
+    // of the device's rung and the preference, 1080p by default. The instance
+    // keeps the device's rung; the media carries the cap.
+    testWidgets(
+      'on a 4K television Auto stops at the Wi-Fi preference',
+      variant: _hardwareDecodePlatform,
+      (tester) async {
+        await pumpPlayer(
+          tester,
+          preloadedStreams: twoSources,
+          profile: const DeviceProfile(
+            isTv: true,
+            physicalRamMb: 8192,
+            tier: DeviceTier.high,
+          ),
+          panelPhysicalSize: uhdPanel,
+          panelDevicePixelRatio: uhdDensity,
+        );
+
+        expect(createdOptions(), contains('--adaptive-maxheight=2160'));
+        expect(lastMediaOptions(), contains(':adaptive-maxheight=1080'));
+
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets(
+      'a step-down starts from the cap the preference set',
+      variant: _hardwareDecodePlatform,
+      (tester) async {
+        await pumpPlayer(
+          tester,
+          preloadedStreams: twoSources,
+          profile: const DeviceProfile(
+            isTv: true,
+            physicalRamMb: 8192,
+            tier: DeviceTier.high,
+          ),
+          panelPhysicalSize: uhdPanel,
+          panelDevicePixelRatio: uhdDensity,
+        );
+
+        var displayed = 0;
+        var lost = 0;
+        for (var i = 0; i < 12; i++) {
+          displayed += 2;
+          lost += 22;
+          engine.decodedPictures(displayed: displayed, lost: lost);
+          await playSeconds(tester, 1);
+        }
+
+        expect(
+          lastMediaOptions(),
+          contains(':adaptive-maxheight=720'),
+          reason:
+              'one rung below the 1080 Auto was playing at, not below the '
+              '2160 the device could take',
         );
 
         await tester.pumpWidget(const SizedBox());
@@ -403,6 +511,11 @@ void main() {
           findsNothing,
           reason: 'a stalled source has not proved anything about this decoder',
         );
+        // HLS gets no nudge: its "Reconnecting…" comes with recovery, at
+        // 25 s.
+        for (var i = 0; i < 15; i++) {
+          await tester.pump(const Duration(seconds: 1));
+        }
         expect(
           find.text(l10n.playerReconnecting),
           findsOneWidget,

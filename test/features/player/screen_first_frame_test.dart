@@ -1,8 +1,12 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skystream/core/domain/entity/multimedia_item.dart';
+import 'package:skystream/features/player/domain/playback_recovery.dart'
+    show kFirstFrameDeadline;
 import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
+import 'package:skystream/l10n/generated/app_localizations.dart';
 
+import 'fake_vlc_engine.dart';
 import 'vlc_screen_harness.dart';
 
 /// The bars come up over a video's first frame, as Android's own player does,
@@ -18,6 +22,9 @@ void main() {
     posterUrl: '',
     provider: 'Remote',
   );
+
+  Future<AppLocalizations> english() =>
+      AppLocalizations.delegate.load(const Locale('en'));
 
   bool chromeUp(WidgetTester tester) => tester
       .widget<VlcPlayerControls>(find.byType(VlcPlayerControls))
@@ -96,6 +103,85 @@ void main() {
         expect(find.semantics.byLabel(label), findsOne, reason: label);
       }
       semantics.dispose();
+    },
+  );
+
+  testWidgets(
+    'media that never reaches a native player gets a new one at the '
+    'first-frame deadline, without giving its source up',
+    variant: texturePlatform,
+    (tester) async {
+      // One iOS open in about sixty never reached libVLC, and retrying the
+      // same player never helped (SkyStream's QoE suite, 2026-10-13).
+      final l10n = await english();
+      final engine = FakeVlcEngine()..distinctViews = true;
+      installEngineMocks(engine: engine);
+      addTearDown(engine.removeExtraViews);
+      final neverAnswered = engine.holdNextReply('create');
+      await pumpPlayer(tester, item: film, videoUrl: film.url);
+      expect(engine.callsTo('create'), hasLength(1));
+      expect(engine.callsTo('setSource'), isEmpty);
+
+      await tester.pump(kFirstFrameDeadline);
+      await settle(tester);
+
+      expect(engine.callsTo('create'), hasLength(2));
+      expect(engine.callsTo('setSource'), isNotEmpty);
+      expect(
+        find.text(l10n.retry),
+        findsNothing,
+        reason: 'libVLC never had the source, so it has not failed',
+      );
+      neverAnswered.complete();
+      await settle(tester);
+      expect(
+        engine
+            .callsTo('dispose')
+            .map((call) => (call.arguments as Map<Object?, Object?>)['viewId']),
+        <Object?>[1],
+        reason: 'the late answer is let go, not attached',
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a second miss gives the source up, and its media never starts behind '
+    'the failed screen',
+    variant: texturePlatform,
+    (tester) async {
+      final l10n = await english();
+      final engine = FakeVlcEngine()..distinctViews = true;
+      installEngineMocks(engine: engine);
+      addTearDown(engine.removeExtraViews);
+      final first = engine.holdNextReply('create');
+      await pumpPlayer(tester, item: film, videoUrl: film.url);
+
+      // The new VlcPlayer's create is held too: still no native player.
+      final second = engine.holdNextReply('create');
+      await tester.pump(kFirstFrameDeadline);
+      await settle(tester);
+      expect(engine.callsTo('create'), hasLength(2));
+      await tester.pump(kFirstFrameDeadline);
+      await settle(tester);
+      expect(find.text(l10n.retry), findsOneWidget);
+
+      // The native players come after all, behind the failed screen.
+      second.complete();
+      first.complete();
+      await settle(tester);
+
+      expect(engine.callsTo('play'), isEmpty);
+      expect(
+        engine
+            .callsTo('setSource')
+            .map(
+              (call) => (call.arguments as Map<Object?, Object?>)['autoPlay'],
+            ),
+        everyElement(isFalse),
+        reason: 'a failed screen plays nothing',
+      );
+      await tester.pumpWidget(const SizedBox());
     },
   );
 }
