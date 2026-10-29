@@ -13,6 +13,7 @@ class AppPalette {
     required this.seed,
     required this.background,
     this.variant = DynamicSchemeVariant.tonalSpot,
+    this.bold = false,
   });
 
   final String id;
@@ -20,6 +21,10 @@ class AppPalette {
   final Color seed;
   final Color background;
   final DynamicSchemeVariant variant;
+
+  /// A vivid theme: its colour fills the whole layout (screens, cards,
+  /// sheets, bars and fields), not just the accents.
+  final bool bold;
 
   /// The stored id that means "no palette": wallpaper colours where the
   /// device offers them, the app's original blue otherwise.
@@ -60,5 +65,30 @@ class AppPalette {
     AppPalette(id: 'ice', name: 'Buz', seed: Color(0xFF81D4FA), background: Color(0xFF0A1015)),
     AppPalette(id: 'sakura', name: 'Sakura', seed: Color(0xFFF48FB1), background: Color(0xFF150D11)),
     AppPalette(id: 'nordic', name: 'Nordik', seed: Color(0xFF5E81AC), background: Color(0xFF0F1218)),
+    ...vivid,
+  ];
+
+  /// The vivid themes ([bold]): strong backgrounds with a contrasting accent.
+  static const List<AppPalette> vivid = [
+    AppPalette(id: 'v_royal', name: 'Kraliyet Mavisi', seed: Color(0xFF2979FF), background: Color(0xFF0A1A4A), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_deep_ocean', name: 'Derin Okyanus', seed: Color(0xFF00B8D4), background: Color(0xFF002B36), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_emerald_forest', name: 'Zümrüt Ormanı', seed: Color(0xFF00E676), background: Color(0xFF06311F), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_purple_night', name: 'Mor Gece', seed: Color(0xFFD500F9), background: Color(0xFF22073F), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_burgundy', name: 'Bordo', seed: Color(0xFFFF1744), background: Color(0xFF3A0812), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_volcano', name: 'Volkan', seed: Color(0xFFFF6D00), background: Color(0xFF3A1600), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_golden_night', name: 'Altın Gece', seed: Color(0xFFFFD600), background: Color(0xFF2B2205), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_neon_pink', name: 'Neon Pembe', seed: Color(0xFFFF4081), background: Color(0xFF33061F), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_turquoise', name: 'Turkuaz', seed: Color(0xFF1DE9B6), background: Color(0xFF003330), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_cyberpunk', name: 'Siberpunk', seed: Color(0xFFF50057), background: Color(0xFF1A0B3A), variant: DynamicSchemeVariant.fidelity, bold: true),
+    AppPalette(id: 'v_navy_gold', name: 'Lacivert Altın', seed: Color(0xFFFFC400), background: Color(0xFF0B1D3A), variant: DynamicSchemeVariant.fidelity, bold: true),
+    AppPalette(id: 'v_espresso', name: 'Espresso', seed: Color(0xFFFF9E40), background: Color(0xFF2E1A0E), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_olive', name: 'Zeytin', seed: Color(0xFFAEEA00), background: Color(0xFF1E2A05), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_midnight_violet', name: 'Gece Moru', seed: Color(0xFF7C4DFF), background: Color(0xFF160F3A), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_steel', name: 'Çelik Mavisi', seed: Color(0xFF40C4FF), background: Color(0xFF10263A), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_crimson_dusk', name: 'Kızıl Akşam', seed: Color(0xFFFF5252), background: Color(0xFF2E0F1E), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_aurora', name: 'Aurora', seed: Color(0xFF64FFDA), background: Color(0xFF0B2440), variant: DynamicSchemeVariant.fidelity, bold: true),
+    AppPalette(id: 'v_matrix', name: 'Matrix', seed: Color(0xFF00E676), background: Color(0xFF001A0A), variant: DynamicSchemeVariant.fidelity, bold: true),
+    AppPalette(id: 'v_lavender_dream', name: 'Lavanta Rüyası', seed: Color(0xFFB388FF), background: Color(0xFF2A1E4A), variant: DynamicSchemeVariant.vibrant, bold: true),
+    AppPalette(id: 'v_reef', name: 'Mercan Resifi', seed: Color(0xFFFF8A65), background: Color(0xFF0D2E3A), variant: DynamicSchemeVariant.fidelity, bold: true),
   ];
 }

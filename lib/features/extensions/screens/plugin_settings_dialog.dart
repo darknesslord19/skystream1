@@ -64,6 +64,16 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
   final Map<String, TextEditingController> _controllers = {};
   String _selectedDomain = '';
 
+  /// The address as it was when the dialog opened: saved only when changed,
+  /// so an untouched dialog doesn't pin the manifest's address for good.
+  String _initialDomain = '';
+
+  /// The manifest's own address, for "back to default".
+  String get _defaultDomain {
+    final domains = widget.plugin.domains ?? const <PluginDomain>[];
+    return domains.isNotEmpty ? domains.first.url : (widget.plugin.manifest['baseUrl']?.toString() ?? '');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -150,6 +160,7 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
           (domains.isNotEmpty
               ? domains.first.url
               : (widget.plugin.manifest['baseUrl']?.toString() ?? ''));
+      _initialDomain = _selectedDomain;
 
       if (!mounted) return;
       setState(() {
@@ -385,11 +396,13 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
         _values[definition.key] = value;
       }
 
-      if (!hasScriptBaseUrl && (widget.plugin.domains?.isNotEmpty ?? false)) {
+      if (!hasScriptBaseUrl && _selectedDomain != _initialDomain) {
+        final isDefault = _selectedDomain.isEmpty || _selectedDomain == _defaultDomain;
         await settingsRepository.setCustomBaseUrl(
           widget.plugin.packageName,
-          _selectedDomain.isEmpty ? null : _selectedDomain,
+          isDefault ? null : _selectedDomain,
         );
+        _initialDomain = _selectedDomain;
         shouldReload = true;
       }
 
@@ -550,8 +563,31 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
     });
   }
 
+  /// Asks for a website address typed in full, for when the site moved to a
+  /// domain the extension doesn't list yet.
+  Future<void> _enterCustomDomain() async {
+    final value = await TextInputDialog.show(
+      context,
+      title: 'Özel adres',
+      message: 'Sitenin yeni adresini yazın, ör. https://yeniadres.com',
+      initialText: _selectedDomain,
+      hintText: 'https://…',
+      keyboardType: TextInputType.url,
+      confirmLabel: 'Kaydet',
+      showPasteButton: true,
+    );
+    if (value == null || !mounted) return;
+    try {
+      final normalized = _normalizedUrl(value);
+      setState(() => _selectedDomain = normalized.isEmpty ? _defaultDomain : normalized);
+    } on FormatException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   Future<void> _showDomainDialog(List<PluginDomain> domains) async {
-    if (_saving || domains.isEmpty) return;
+    if (_saving) return;
+    if (domains.isEmpty) return _enterCustomDomain();
 
     await showDialog<void>(
       context: context,
@@ -581,6 +617,17 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
                       },
                     ),
                   )
+                  .followedBy([
+                    ListTile(
+                      leading: const Icon(Icons.edit_rounded),
+                      title: const Text('Özel adres gir…'),
+                      subtitle: domains.any((d) => d.url == _selectedDomain) ? null : Text(_selectedDomain),
+                      onTap: () {
+                        Navigator.of(dialogContext).pop();
+                        _enterCustomDomain();
+                      },
+                    ),
+                  ])
                   .toList(growable: false),
             ),
           ),
@@ -674,10 +721,10 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
               ),
             ),
           if (_definitions.isNotEmpty &&
-              ((domains.isNotEmpty && !hasScriptBaseUrl) ||
+              (!hasScriptBaseUrl ||
                   _providers.isNotEmpty))
             const SizedBox(height: LayoutConstants.spacingLg),
-          if (domains.isNotEmpty && !hasScriptBaseUrl)
+          if (!hasScriptBaseUrl)
             SettingsGroup(
               filled: false,
               title: 'Website address',
@@ -685,13 +732,13 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
                 SettingsTile(
                   icon: Icons.language_rounded,
                   title: 'Selected website',
-                  subtitle: _selectedDomainLabel(domains),
+                  subtitle: _selectedDomain.isEmpty ? 'Özel adres gir…' : _selectedDomainLabel(domains),
                   onTap: _saving ? null : () => _showDomainDialog(domains),
                   isLast: true,
                 ),
               ],
             ),
-          if (domains.isNotEmpty && !hasScriptBaseUrl && _providers.isNotEmpty)
+          if (!hasScriptBaseUrl && _providers.isNotEmpty)
             const SizedBox(height: LayoutConstants.spacingLg),
           if (_providers.isNotEmpty)
             SettingsGroup(
@@ -744,7 +791,7 @@ class _PluginSettingsDialogState extends ConsumerState<PluginSettingsDialog> {
     final hasContent =
         _definitions.isNotEmpty ||
         _providers.isNotEmpty ||
-        (domains.isNotEmpty && !hasScriptBaseUrl);
+        !hasScriptBaseUrl;
 
     final theme = Theme.of(context);
     final Widget body;

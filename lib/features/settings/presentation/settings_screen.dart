@@ -8,6 +8,7 @@ import '../../../core/theme/theme_provider.dart';
 
 import 'widgets/settings_widgets.dart';
 import 'widgets/settings_dialogs.dart';
+import 'widgets/address_redirects_dialog.dart';
 import 'full_screen_mode_provider.dart';
 import 'general_settings_provider.dart';
 import 'app_version_provider.dart';
@@ -80,8 +81,14 @@ class SettingsScreen extends ConsumerWidget {
                       icon: Icons.dashboard_customize_rounded,
                       title: 'Stremio Add-ons',
                       subtitle: 'Manage and discover installed add-ons',
-                      isLast: true,
                       onTap: () => const AddonsRoute().go(context),
+                    ),
+                    SettingsTile(
+                      icon: Icons.alt_route_rounded,
+                      title: 'Adres yönlendirmeleri',
+                      subtitle: 'Alan adı değişen eklenti sitelerini yeni adrese yönlendir',
+                      isLast: true,
+                      onTap: () => showAddressRedirectsDialog(context),
                     ),
                   ],
                 ),

@@ -3005,24 +3005,33 @@ void showPaletteDialog(BuildContext context, WidgetRef ref) {
                     onTap: () => pick(null),
                   ),
                   const SizedBox(height: 12),
-                  GridView.count(
-                    crossAxisCount: 4,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 8,
-                    childAspectRatio: 0.78,
-                    children: [
-                      for (final palette in AppPalette.all)
-                        _PaletteSwatch(
-                          name: palette.name,
-                          seed: palette.seed,
-                          background: palette.background,
-                          selected: current?.id == palette.id,
-                          onTap: () => pick(palette),
-                        ),
-                    ],
-                  ),
+                  for (final (title, palettes) in [
+                    ('Yumuşak temalar', AppPalette.all.where((p) => !p.bold).toList()),
+                    ('Canlı temalar', AppPalette.vivid),
+                  ]) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      child: Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    ),
+                    GridView.count(
+                      crossAxisCount: 4,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 8,
+                      childAspectRatio: 0.78,
+                      children: [
+                        for (final palette in palettes)
+                          _PaletteSwatch(
+                            name: palette.name,
+                            seed: palette.seed,
+                            background: palette.background,
+                            selected: current?.id == palette.id,
+                            onTap: () => pick(palette),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -209,6 +209,35 @@ class ClearanceStore {
   /// By host: another host of the same site may live elsewhere.
   final Map<String, Uri> _moves = {};
 
+  /// Hosts whose move the person set by hand (Settings → Address redirects):
+  /// kept even when the new address stops answering, until they remove it.
+  final Set<String> _manualMoves = {};
+
+  /// Whether [host]'s move was set by hand.
+  bool isManualMove(String host) => _manualMoves.contains(host);
+
+  /// The moves set by hand, by host.
+  Map<String, Uri> get manualMoves => {
+    for (final host in _manualMoves)
+      if (_moves[host] != null) host: _moves[host]!,
+  };
+
+  /// Sends [host]'s requests to [origin] from now on, and keeps it so.
+  void setManualMove(String host, Uri origin) {
+    final key = host.toLowerCase();
+    _manualMoves.add(key);
+    _moves[key] = Uri(scheme: origin.scheme, host: origin.host, port: origin.hasPort ? origin.port : null);
+    _changed(saveNow: true);
+  }
+
+  /// Removes a move set by hand: [host]'s requests go to its own address again.
+  void removeManualMove(String host) {
+    final key = host.toLowerCase();
+    _manualMoves.remove(key);
+    _moves.remove(key);
+    _changed(saveNow: true);
+  }
+
   /// Sites whose check the person asked not to open by itself.
   final Set<String> _quiet = {};
 
@@ -230,6 +259,7 @@ class ClearanceStore {
   /// [host] answered from [origin] through permanent redirects: its later
   /// requests go there. A later move replaces it.
   void recordMove(String host, Uri origin) {
+    if (_manualMoves.contains(host)) return;
     if (_moves[host] == origin) return;
     _moves[host] = origin;
     _changed(saveNow: true);
@@ -238,6 +268,7 @@ class ClearanceStore {
   /// [host]'s new domain stopped answering, or it moved back: its requests go
   /// to its own address again, which says where it is now.
   void forgetMove(String host) {
+    if (_manualMoves.contains(host)) return;
     if (_moves.remove(host) == null) return;
     _changed(saveNow: true);
   }
@@ -263,6 +294,8 @@ class ClearanceStore {
       // moves (GitHub's raw host to github.com), which broke its downloads.
       final quiet = json['quietSites'];
       if (quiet is List<dynamic>) _quiet.addAll(quiet.whereType<String>());
+      final manual = json['manualMoves'];
+      if (manual is List<dynamic>) _manualMoves.addAll(manual.whereType<String>());
       final moves = json['checkedMoves'];
       if (moves is Map<String, dynamic>) {
         for (final e in moves.entries) {
@@ -417,6 +450,7 @@ class ClearanceStore {
             for (final e in _moves.entries) e.key: e.value.toString(),
           },
           'quietSites': [..._quiet],
+          'manualMoves': [..._manualMoves],
         }),
         flush: true,
       );

@@ -124,10 +124,17 @@ class AppTheme {
     // With a palette chosen, it decides every colour; otherwise the device's
     // wallpaper colours, and the original blue where there are none.
     final background = palette?.background ?? const Color(0xFF000000);
+    final bold = palette?.bold ?? false;
     final raised = palette == null
         ? const Color(0xFF18181F)
+        : bold
+        ? _toward(background, palette.seed, 0.10, 0.10)
         : Color.alphaBlend(palette.seed.withValues(alpha: 0.07), Color.lerp(background, Colors.white, 0.06)!);
-    final line = palette == null ? const Color(0xFF22222E) : Color.lerp(background, Colors.white, 0.11)!;
+    final line = palette == null
+        ? const Color(0xFF22222E)
+        : bold
+        ? _toward(background, palette.seed, 0.18, 0.22)
+        : Color.lerp(background, Colors.white, 0.11)!;
     var colorScheme = palette != null
         ? ColorScheme.fromSeed(
             seedColor: palette.seed,
@@ -143,6 +150,20 @@ class AppTheme {
 
     // Surfaces follow the screen colour so lists and cards sit flush on it.
     colorScheme = colorScheme.copyWith(surface: background);
+    // A vivid theme colours every container step too, so nothing in the
+    // layout falls back to neutral grey.
+    if (palette != null && bold) {
+      colorScheme = colorScheme.copyWith(
+        surfaceContainerLowest: Color.lerp(background, Colors.black, 0.25),
+        surfaceContainerLow: _toward(background, palette.seed, 0.04, 0.05),
+        surfaceContainer: _toward(background, palette.seed, 0.07, 0.08),
+        surfaceContainerHigh: _toward(background, palette.seed, 0.10, 0.10),
+        surfaceContainerHighest: _toward(background, palette.seed, 0.14, 0.13),
+        surfaceBright: _toward(background, palette.seed, 0.16, 0.15),
+        surfaceDim: background,
+        outlineVariant: line,
+      );
+    }
 
     return ThemeData(
       useMaterial3: true,
@@ -334,15 +355,33 @@ class AppTheme {
 
   static ThemeData createLightTheme(ColorScheme? dynamicScheme, {AppPalette? palette}) {
     _registerFontLicence();
-    final colorScheme = palette != null
+    var colorScheme = palette != null
         ? ColorScheme.fromSeed(
             seedColor: palette.seed,
             brightness: Brightness.light,
             dynamicSchemeVariant: palette.variant,
           )
         : _warmLightScheme;
+    // Light mode of a vivid theme: a clearly tinted page in its colour.
+    if (palette != null && palette.bold) {
+      Color tint(double t) => Color.lerp(Colors.white, palette.seed, t)!;
+      colorScheme = colorScheme.copyWith(
+        surface: tint(0.14),
+        surfaceContainerLowest: tint(0.06),
+        surfaceContainerLow: tint(0.10),
+        surfaceContainer: tint(0.18),
+        surfaceContainerHigh: tint(0.22),
+        surfaceContainerHighest: tint(0.27),
+        outlineVariant: tint(0.38),
+      );
+    }
     return _lightTheme(colorScheme);
   }
+
+  /// [base] lifted toward white by [light] and toward [seed] by [tint]: the
+  /// steps of a vivid theme's surfaces.
+  static Color _toward(Color base, Color seed, double light, double tint) =>
+      Color.lerp(Color.lerp(base, Colors.white, light)!, seed, tint)!;
 
   static const ColorScheme _warmLightScheme = ColorScheme.light(
       primary: lightCoral,

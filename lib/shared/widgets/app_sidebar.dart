@@ -159,12 +159,10 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
     const unscaledCenters = [36.0, 92.0, 148.0, 204.0, 260.0];
 
     // Outer container colors matching bg-gray-50 / dark:bg-neutral-900 verbatim
-    final dockBgColor = isDark
-        ? const Color(0xFF171717)
-        : const Color(0xFFF9FAFB);
-    final dockBorderColor = isDark
-        ? const Color(0xFF262626)
-        : const Color(0xFFE5E7EB);
+    // From the colour theme, so every theme reaches the dock too.
+    final sidebarScheme = Theme.of(context).colorScheme;
+    final dockBgColor = sidebarScheme.surfaceContainerLow;
+    final dockBorderColor = sidebarScheme.outlineVariant;
 
     return Material(
       color: Colors.transparent,
@@ -331,9 +329,7 @@ class _SidebarDockItemState extends ConsumerState<_SidebarDockItem> {
     final iconColor = isDark ? Colors.white : const Color(0xFF171717);
 
     // Tooltip style color variables (bg-gray-100 / dark:bg-neutral-800 verbatim)
-    final tooltipBgColor = isDark
-        ? const Color(0xFF262626)
-        : const Color(0xFFF3F4F6);
+    final tooltipBgColor = Theme.of(context).colorScheme.surfaceContainerHigh;
     final tooltipBorderColor = isDark
         ? const Color(0xFF171717)
         : const Color(0xFFE5E7EB);

@@ -1104,8 +1104,11 @@ class _PluginTileState extends ConsumerState<_PluginTile> {
                           snapshot.data?.isNotEmpty ?? false;
                       final declaresScriptSettings =
                           installedPlugin.manifest['hasSettings'] == true;
+                      // Every extension can be pointed at a new address
+                      // when its site moves, so every one has settings.
                       final hasDomains =
-                          installedPlugin.domains?.isNotEmpty ?? false;
+                          (installedPlugin.domains?.isNotEmpty ?? false) ||
+                          installedPlugin.manifest['baseUrl'] != null;
                       final hasStaticProviders =
                           installedPlugin.providers?.isNotEmpty ?? false;
 
